@@ -802,6 +802,36 @@ func (r *StroomClusterReconciler) createIngresses(ctx context.Context, stroomClu
 					},
 				},
 			})
+
+			// TLS passthrough ingress - routes raw TLS connections by SNI hostname without termination
+			passthroughIngressAnnotations := map[string]string{
+				"nginx.ingress.kubernetes.io/ssl-passthrough": "true",
+			}
+
+			// Apply any user-provided annotations
+			for k, v := range nodeSet.IngressAnnotations {
+				passthroughIngressAnnotations[k] = v
+			}
+
+			passthroughIngressLabels := stroomCluster.GetLabels()
+			for k, v := range nodeSet.IngressLabels {
+				passthroughIngressLabels[k] = v
+			}
+
+			ingresses = append(ingresses, netv1.Ingress{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        clusterName + "-passthrough",
+					Namespace:   stroomCluster.Namespace,
+					Labels:      passthroughIngressLabels,
+					Annotations: passthroughIngressAnnotations,
+				},
+				Spec: netv1.IngressSpec{
+					IngressClassName: &ingressSettings.ClassName,
+					Rules: []netv1.IngressRule{
+						r.createPassthroughIngressRule(ingressSettings.HostName),
+					},
+				},
+			})
 		}
 	}
 
@@ -841,5 +871,11 @@ func (r *StroomClusterReconciler) createIngressRule(hostName string, pathType ne
 				}},
 			},
 		},
+	}
+}
+
+func (r *StroomClusterReconciler) createPassthroughIngressRule(hostName string) netv1.IngressRule {
+	return netv1.IngressRule{
+		Host: hostName,
 	}
 }
