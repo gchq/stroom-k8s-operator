@@ -669,7 +669,7 @@ func (r *StroomClusterReconciler) createIngresses(ctx context.Context, stroomClu
 		clusterName := stroomCluster.GetBaseName()
 		serviceName := stroomCluster.GetNodeSetServiceName(&nodeSet)
 
-		if !nodeSet.IngressEnabled {
+		if nodeSet.IngressEnabled != nil && !*nodeSet.IngressEnabled {
 			continue
 		}
 
