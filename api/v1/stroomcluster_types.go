@@ -18,6 +18,7 @@ package v1
 
 import (
 	"fmt"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -57,6 +58,10 @@ func (in *StroomCluster) GetNodeSetName(nodeSet *NodeSet) string {
 
 func (in *StroomCluster) GetLogSenderConfigMapName() string {
 	return fmt.Sprintf("%v-log-sender", in.GetBaseName())
+}
+
+func (in *StroomCluster) GetNginxMtlsName() string {
+	return fmt.Sprintf("%v-mtls-nginx", in.GetBaseName())
 }
 
 func (in *StroomCluster) GetCliJobName(name string) string {

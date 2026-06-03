@@ -20,6 +20,9 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"path"
+	"time"
+
 	"github.com/go-logr/logr"
 	common "github.com/gradata-systems/stroom-k8s-operator/controllers/common"
 	appsv1 "k8s.io/api/apps/v1"
@@ -27,10 +30,8 @@ import (
 	v1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
-	"path"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -64,6 +65,7 @@ var StaticFiles embed.FS
 //+kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;delete
 //+kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -234,6 +236,48 @@ func (r *StroomClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		})
 		if err != nil {
 			return ctrl.Result{}, err
+		}
+	}
+
+	// Create nginx mTLS terminator resources if mTLS is enabled
+	if stroomCluster.Spec.Ingress.Mtls.Enabled {
+		// nginx ConfigMap (nginx.conf)
+		foundNginxConfigMap := corev1.ConfigMap{}
+		result, err = r.getOrCreateObject(ctx, stroomCluster.GetNginxMtlsName(), stroomCluster.Namespace, "ConfigMap", &foundNginxConfigMap, func() error {
+			resource := r.createNginxMtlsConfigMap(&stroomCluster)
+			logger.Info("Creating nginx mTLS ConfigMap", "Namespace", resource.Namespace, "Name", resource.Name)
+			return r.Create(ctx, resource)
+		})
+		if err != nil {
+			return result, err
+		} else if !result.IsZero() {
+			return result, nil
+		}
+
+		// nginx Deployment
+		foundNginxDeployment := appsv1.Deployment{}
+		result, err = r.getOrCreateObject(ctx, stroomCluster.GetNginxMtlsName(), stroomCluster.Namespace, "Deployment", &foundNginxDeployment, func() error {
+			resource := r.createNginxMtlsDeployment(&stroomCluster)
+			logger.Info("Creating nginx mTLS Deployment", "Namespace", resource.Namespace, "Name", resource.Name)
+			return r.Create(ctx, resource)
+		})
+		if err != nil {
+			return result, err
+		} else if !result.IsZero() {
+			return result, nil
+		}
+
+		// nginx Service
+		foundNginxService := corev1.Service{}
+		result, err = r.getOrCreateObject(ctx, stroomCluster.GetNginxMtlsName(), stroomCluster.Namespace, "Service", &foundNginxService, func() error {
+			resource := r.createNginxMtlsService(&stroomCluster)
+			logger.Info("Creating nginx mTLS Service", "Namespace", resource.Namespace, "Name", resource.Name)
+			return r.Create(ctx, resource)
+		})
+		if err != nil {
+			return result, err
+		} else if !result.IsZero() {
+			return result, nil
 		}
 	}
 

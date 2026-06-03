@@ -28,6 +28,28 @@ type IngressSettings struct {
 	ClassName string `json:"className,omitempty"`
 	// Override path type for all ingress resources as `ImplementationSpecific`
 	PathTypeOverride bool `json:"pathTypeOverride,omitempty"`
+	// Mtls configures an optional nginx deployment that terminates mTLS and forwards the client
+	// certificate as X-SSL-CERT to Stroom. HAProxy routes raw TLS connections by SNI passthrough
+	// to the nginx Service, which performs the TLS/mTLS handshake.
+	// +kubebuilder:validation:Optional
+	Mtls MtlsSettings `json:"mtls,omitempty"`
+}
+
+// MtlsSettings configures a standalone nginx mTLS terminator deployed alongside Stroom.
+type MtlsSettings struct {
+	// Enabled controls whether the nginx mTLS terminator is deployed
+	Enabled bool `json:"enabled"`
+	// CaSecretName is the name of a Secret containing `ca.crt` — the CA used to verify client
+	// certificates. If omitted, client certs are accepted without CA verification.
+	// +kubebuilder:validation:Optional
+	CaSecretName string `json:"caSecretName,omitempty"`
+	// TlsSecretName is the name of a Secret containing `tls.crt` and `tls.key` for nginx's
+	// server certificate presented during the TLS handshake.
+	// +kubebuilder:validation:Optional
+	TlsSecretName string `json:"tlsSecretName,omitempty"`
+	// Image is the nginx container image to use. Defaults to `nginx:stable-alpine`.
+	// +kubebuilder:validation:Optional
+	Image string `json:"image,omitempty"`
 }
 
 type OpenIdConfiguration struct {
