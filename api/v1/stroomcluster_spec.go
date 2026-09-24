@@ -27,8 +27,9 @@ type StroomClusterSpec struct {
 	ConfigMapRef ConfigMapRef `json:"configMapRef,omitempty"`
 	// Configures OpenID to enable operator components to query the Stroom API
 	OpenId OpenIdConfiguration `json:"openId"`
-	// HTTPS settings
-	Https HttpsSettings `json:"https"`
+	// HTTPS settings. Omit to use plain-text (HTTP)
+	// +kubebuilder:validation:Optional
+	Https HttpsSettings `json:"https,omitempty"`
 	// +kubebuilder:validation:Required
 	Ingress IngressSettings `json:"ingress"`
 	// Pod management policy to use when deploying or scaling the StroomCluster
@@ -65,6 +66,10 @@ type ConfigMapRef struct {
 }
 
 func (in *ConfigMapRef) IsZero() bool {
+	if in == nil {
+		return true
+	}
+
 	return in.Name == "" && in.ItemName == ""
 }
 
@@ -82,12 +87,28 @@ type LogSenderSettings struct {
 	// Name of the `Environment` to set in feed metadata. If omitted, the cluster name is used (converted to UPPERCASE).
 	EnvironmentName string `json:"environmentName,omitempty"`
 	// Name of the `System` to set in feed metadata
-	SystemName     string                      `json:"systemName,omitempty"`
-	Resources      corev1.ResourceRequirements `json:"resources,omitempty"`
-	MtlsEnabled    bool                        `json:"mtlsEnabled"`
-	MtlsSecretName string                      `json:"mtlsSecretName,omitempty"`
+	SystemName string                      `json:"systemName,omitempty"`
+	Resources  corev1.ResourceRequirements `json:"resources,omitempty"`
+	Tls        TlsSettings                 `json:"tls,omitempty"`
 }
 
 func (in *LogSenderSettings) IsZero() bool {
+	if in == nil {
+		return true
+	}
+
 	return !in.Enabled
+}
+
+type TlsSettings struct {
+	// Name of the TLS Secret containing a CA certificate (ca.crt) and client certificate/key pair (tls.crt and tls.key)
+	SecretName string `json:"secretName"`
+}
+
+func (in *TlsSettings) IsZero() bool {
+	if in == nil {
+		return true
+	}
+
+	return in.SecretName == ""
 }
