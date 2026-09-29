@@ -5,7 +5,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  NAMESPACE: gradata-systems
+  NAMESPACE: gchq
 
 jobs:    
     build_and_release_helm_chart:
