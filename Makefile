@@ -32,9 +32,9 @@ BUNDLE_METADATA_OPTS ?= $(BUNDLE_CHANNELS) $(BUNDLE_DEFAULT_CHANNEL)
 # For example, running 'make bundle-build bundle-push catalog-build catalog-push' will build and push both
 # gchq.github.io/stroom-k8s-operator-bundle:$VERSION and gchq.github.io/stroom-k8s-operator-catalog:$VERSION.
 ifneq ($(origin PRIVATE_REGISTRY), undefined)
-IMAGE_TAG_BASE = $(PRIVATE_REGISTRY)/gradata/stroom-k8s-operator
+IMAGE_TAG_BASE = $(PRIVATE_REGISTRY)/gchq/stroom-k8s-operator
 else
-IMAGE_TAG_BASE ?= gradata/stroom-k8s-operator
+IMAGE_TAG_BASE ?= gchq/stroom-k8s-operator
 endif
 
 # BUNDLE_IMG defines the image:tag used for the bundle.
