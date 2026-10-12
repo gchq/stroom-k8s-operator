@@ -1,8 +1,9 @@
-package controllers
+package controller
 
 import (
-	"k8s.io/apimachinery/pkg/api/resource"
 	"time"
+
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (

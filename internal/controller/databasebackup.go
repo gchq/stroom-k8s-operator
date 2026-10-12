@@ -1,15 +1,16 @@
-package controllers
+package controller
 
 import (
 	"fmt"
+	"path"
+	"strconv"
+	"strings"
+
 	stroomv1 "github.com/gradata-systems/stroom-k8s-operator/api/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"path"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"strconv"
-	"strings"
 )
 
 func (r *DatabaseBackupReconciler) createCronJob(dbBackup *stroomv1.DatabaseBackup, dbInfo *DatabaseConnectionInfo) *batchv1.CronJob {

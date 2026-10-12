@@ -14,19 +14,20 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controllers
+package controller
 
 import (
 	"context"
 	"fmt"
+	"math"
+	"time"
+
 	"github.com/go-logr/logr"
-	controllers "github.com/gradata-systems/stroom-k8s-operator/controllers/common"
+	"github.com/gradata-systems/stroom-k8s-operator/internal/controller/common"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	metrics "k8s.io/metrics/pkg/apis/metrics/v1beta1"
-	"math"
-	"time"
 
 	stroomv1 "github.com/gradata-systems/stroom-k8s-operator/api/v1"
 	"k8s.io/apimachinery/pkg/runtime"

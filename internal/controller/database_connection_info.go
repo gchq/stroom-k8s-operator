@@ -1,7 +1,8 @@
-package controllers
+package controller
 
 import (
 	"fmt"
+
 	v1 "github.com/gradata-systems/stroom-k8s-operator/api/v1"
 )
 

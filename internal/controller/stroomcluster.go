@@ -1,4 +1,4 @@
-package controllers
+package controller
 
 import (
 	"context"
@@ -25,13 +25,17 @@ const (
 	AppHttpsPortNumber          = 8443
 	AdminPortName               = "admin"
 	AdminPortNumber             = 8081
+	StaticContentVolumeName     = "static-content"
 	StroomNodePvcName           = "data"
 	StroomNodeContainerName     = "stroom-node"
+	StroomKeystoreVolumeName    = "keystore"
 	StroomTlsVolumeName         = "tls"
 	StroomApiTokenVolumeName    = "api-token"
 	StroomApiTokenMountPath     = "/stroom/auth"
+	LogSenderConfigMapName      = "log-sender-configmap"
 	LogSenderDefaultCpuLimit    = "500m"
 	LogSenderDefaultMemoryLimit = "256Mi"
+	LogSenderCertsVolumeName    = "log-sender-certs"
 )
 
 func (r *StroomClusterReconciler) createNodeSetPvcLabels(stroomCluster *stroomv1.StroomCluster, nodeSet *stroomv1.NodeSet) map[string]string {
@@ -69,16 +73,17 @@ func (r *StroomClusterReconciler) createConfigMap(stroomCluster *stroomv1.Stroom
 }
 
 func (r *StroomClusterReconciler) createLogSenderConfigMap(stroomCluster *stroomv1.StroomCluster) *corev1.ConfigMap {
+	var logSender = stroomCluster.Spec.LogSender
 
-	// Configure log sender with or without mtls
+	// Configure log sender with or without client certificate authentication
 	var logSenderConfig map[string]string
 
-	if stroomCluster.Spec.LogSender.MtlsEnabled {
+	if !logSender.Tls.IsZero() {
 		logSenderConfig = map[string]string{
 			"crontab.txt": "" +
-				"* * * * * ${LOG_SENDER_SCRIPT} \"${STROOM_BASE_LOGS_DIR}/access\" STROOM-ACCESS-EVENTS \"${STROOM_DATAFEED_URL}\" --system \"${STROOM_SYSTEM_NAME}\" --environment \"${STROOM_ENVIRONMENT_NAME}\" --file-regex \"${STROOM_FILE_REGEX}\" -m ${STROOM_MAX_DELAY_SECS} --delete-after-sending --no-secure --cert 	/stroom-log-sender/certs/log-sender.crt --key /stroom-log-sender/certs/log-sender.key --compress > /dev/stdout\n" +
-				"* * * * * ${LOG_SENDER_SCRIPT} \"${STROOM_BASE_LOGS_DIR}/app\"    STROOM-APP-EVENTS    \"${STROOM_DATAFEED_URL}\" --system \"${STROOM_SYSTEM_NAME}\" --environment \"${STROOM_ENVIRONMENT_NAME}\" --file-regex \"${STROOM_FILE_REGEX}\" -m ${STROOM_MAX_DELAY_SECS} --delete-after-sending --no-secure --cert 	/stroom-log-sender/certs/log-sender.crt --key /stroom-log-sender/certs/log-sender.key --compress > /dev/stdout\n" +
-				"* * * * * ${LOG_SENDER_SCRIPT} \"${STROOM_BASE_LOGS_DIR}/user\"   STROOM-USER-EVENTS   \"${STROOM_DATAFEED_URL}\" --system \"${STROOM_SYSTEM_NAME}\" --environment \"${STROOM_ENVIRONMENT_NAME}\" --file-regex \"${STROOM_FILE_REGEX}\" -m ${STROOM_MAX_DELAY_SECS} --delete-after-sending --no-secure --cert 	/stroom-log-sender/certs/log-sender.crt --key /stroom-log-sender/certs/log-sender.key --compress > /dev/stdout",
+				"* * * * * ${LOG_SENDER_SCRIPT} \"${STROOM_BASE_LOGS_DIR}/access\" STROOM-ACCESS-EVENTS \"${STROOM_DATAFEED_URL}\" --system \"${STROOM_SYSTEM_NAME}\" --environment \"${STROOM_ENVIRONMENT_NAME}\" --file-regex \"${STROOM_FILE_REGEX}\" -m ${STROOM_MAX_DELAY_SECS} --delete-after-sending --cacert /stroom-log-sender/certs/ca.crt --cert /stroom-log-sender/certs/tls.crt --key /stroom-log-sender/certs/tls.key --compress > /dev/stdout\n" +
+				"* * * * * ${LOG_SENDER_SCRIPT} \"${STROOM_BASE_LOGS_DIR}/app\"    STROOM-APP-EVENTS    \"${STROOM_DATAFEED_URL}\" --system \"${STROOM_SYSTEM_NAME}\" --environment \"${STROOM_ENVIRONMENT_NAME}\" --file-regex \"${STROOM_FILE_REGEX}\" -m ${STROOM_MAX_DELAY_SECS} --delete-after-sending --cacert /stroom-log-sender/certs/ca.crt --cert /stroom-log-sender/certs/tls.crt --key /stroom-log-sender/certs/tls.key --compress > /dev/stdout\n" +
+				"* * * * * ${LOG_SENDER_SCRIPT} \"${STROOM_BASE_LOGS_DIR}/user\"   STROOM-USER-EVENTS   \"${STROOM_DATAFEED_URL}\" --system \"${STROOM_SYSTEM_NAME}\" --environment \"${STROOM_ENVIRONMENT_NAME}\" --file-regex \"${STROOM_FILE_REGEX}\" -m ${STROOM_MAX_DELAY_SECS} --delete-after-sending --cacert /stroom-log-sender/certs/ca.crt --cert /stroom-log-sender/certs/tls.crt --key /stroom-log-sender/certs/tls.key --compress > /dev/stdout",
 		}
 	} else {
 		logSenderConfig = map[string]string{
@@ -106,7 +111,7 @@ func (r *StroomClusterReconciler) createStaticContentVolume(stroomCluster *stroo
 	// Scripts need execute permissions
 	var fileMode int32 = 0554
 	return &corev1.Volume{
-		Name: "static-content",
+		Name: StaticContentVolumeName,
 		VolumeSource: corev1.VolumeSource{
 			ConfigMap: &corev1.ConfigMapVolumeSource{
 				LocalObjectReference: corev1.LocalObjectReference{
@@ -214,9 +219,30 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 				Key: dbInfo.UserName,
 			},
 		},
+	}, {
+		Name:  "STROOM_TEMP",
+		Value: "/stroom/tmp",
 	}}, stroomCluster.Spec.ExtraEnv...)
 
-	if stroomCluster.Spec.Https.Enabled {
+	// List the jobs that should be managed by the node startup and shutdown scripts.
+	// These are typically node role dependent. Frontend nodes for instance, shouldn't have the `Data Processor` node
+	// enabled.
+	var includeJobs []string
+	if nodeSet.ManagedJobs != nil && len(nodeSet.ManagedJobs) > 0 {
+		includeJobs = nodeSet.ManagedJobs
+	} else if nodeSet.Role == stroomv1.ProcessingNodeRole {
+		includeJobs = []string{}
+	} else if nodeSet.Role == stroomv1.FrontendNodeRole {
+		includeJobs = []string{
+			"Reindex Content",
+		}
+	}
+	env = append(env, corev1.EnvVar{
+		Name:  "STROOM_NODE_MANAGED_JOBS",
+		Value: strings.Join(includeJobs, ","),
+	})
+
+	if !stroomCluster.Spec.Https.IsZero() {
 		env = append(env, corev1.EnvVar{
 			Name: "STROOM_KEYSTORE_PASSWORD",
 			ValueFrom: &corev1.EnvVarSource{
@@ -262,21 +288,28 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 		},
 	}
 
-	if stroomCluster.Spec.Https.Enabled {
-		volumes = append(volumes, corev1.Volume{
-			Name: StroomTlsVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{
-					SecretName: stroomCluster.Spec.Https.TlsSecretName,
+	if !stroomCluster.Spec.Https.IsZero() {
+		volumes = append(volumes, []corev1.Volume{
+			{
+				Name: StroomTlsVolumeName,
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						SecretName: stroomCluster.Spec.Https.TlsSecretName,
+					},
 				},
 			},
-		})
+			{
+				Name: StroomKeystoreVolumeName,
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{},
+				},
+			},
+		}...)
 	}
 
 	if !logSender.IsZero() {
-		var logSenderCertsOptional = true
 		volumes = append(volumes, corev1.Volume{
-			Name: "log-sender-configmap",
+			Name: LogSenderConfigMapName,
 			VolumeSource: corev1.VolumeSource{
 				ConfigMap: &corev1.ConfigMapVolumeSource{
 					LocalObjectReference: corev1.LocalObjectReference{
@@ -285,15 +318,17 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 				},
 			},
 		})
-		volumes = append(volumes, corev1.Volume{
-			Name: "log-sender-certs",
-			VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{
-					SecretName: stroomCluster.Spec.LogSender.MtlsSecretName,
-					Optional:   &logSenderCertsOptional,
+
+		if !logSender.Tls.IsZero() {
+			volumes = append(volumes, corev1.Volume{
+				Name: LogSenderCertsVolumeName,
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						SecretName: stroomCluster.Spec.LogSender.Tls.SecretName,
+					},
 				},
-			},
-		})
+			})
+		}
 	}
 
 	// If a Stroom node config override is provided, create a volume for it
@@ -311,17 +346,17 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 	}
 
 	volumeMounts := []corev1.VolumeMount{{
-		Name:      "static-content",
+		Name:      StaticContentVolumeName,
 		SubPath:   "utils.sh",
 		MountPath: "/stroom/scripts/utils.sh",
 		ReadOnly:  true,
 	}, {
-		Name:      "static-content",
+		Name:      StaticContentVolumeName,
 		SubPath:   "node-start.sh",
 		MountPath: "/stroom/scripts/node-start.sh",
 		ReadOnly:  true,
 	}, {
-		Name:      "static-content",
+		Name:      StaticContentVolumeName,
 		SubPath:   "node-pre-stop.sh",
 		MountPath: "/stroom/scripts/node-pre-stop.sh",
 		ReadOnly:  true,
@@ -342,8 +377,16 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 		MountPath: "/stroom/tmp",
 	}, {
 		Name:      StroomNodePvcName,
+		SubPath:   "lmdb",
+		MountPath: "/stroom/lmdb",
+	}, {
+		Name:      StroomNodePvcName,
 		SubPath:   "lmdb_library",
 		MountPath: "/stroom/lmdb_library",
+	}, {
+		Name:      StroomNodePvcName,
+		SubPath:   "planb",
+		MountPath: "/stroom/planb",
 	}, {
 		Name:      StroomNodePvcName,
 		SubPath:   "proxy-repo",
@@ -354,25 +397,17 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 		MountPath: "/stroom/reference_data",
 	}, {
 		Name:      StroomNodePvcName,
-		SubPath:   "search-results",
-		MountPath: "/stroom/search_results",
-	}, {
-		Name:      StroomNodePvcName,
 		SubPath:   "reference_staging_data",
 		MountPath: "/stroom/reference_staging_data",
 	}, {
 		Name:      StroomNodePvcName,
-		SubPath:   "analytic_store",
-		MountPath: "/lmdb/analytic_store",
-	}, {
-		Name:      StroomNodePvcName,
-		SubPath:   "duplicate_check",
-		MountPath: "/lmdb/duplicate_check",
+		SubPath:   "search-results",
+		MountPath: "/stroom/search_results",
 	}}
 
-	if stroomCluster.Spec.Https.Enabled {
+	if !stroomCluster.Spec.Https.IsZero() {
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{
-			Name:      StroomTlsVolumeName,
+			Name:      StroomKeystoreVolumeName,
 			MountPath: "/stroom/pki/tls",
 			ReadOnly:  true,
 		})
@@ -385,6 +420,48 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 	}
 	if len(stroomCluster.Spec.ExtraVolumeMounts) > 0 {
 		volumeMounts = append(volumeMounts, stroomCluster.Spec.ExtraVolumeMounts...)
+	}
+	if len(nodeSet.ExtraVolumeMounts) > 0 {
+		volumeMounts = append(volumeMounts, nodeSet.ExtraVolumeMounts...)
+	}
+
+	var initContainers []corev1.Container
+	if !stroomCluster.Spec.Https.IsZero() {
+		initContainers = append(initContainers, corev1.Container{
+			Name:            "generate-keystore",
+			Image:           stroomCluster.Spec.Image.String(),
+			ImagePullPolicy: stroomCluster.Spec.ImagePullPolicy,
+			Command: []string{
+				"sh",
+				"-c",
+				"/opt/scripts/generate-keystore.sh",
+			},
+			Env: []corev1.EnvVar{{
+				Name: "STROOM_KEYSTORE_PASSWORD",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: stroomCluster.Spec.Https.TlsKeystorePasswordSecretRef.SecretName,
+						},
+						Key: stroomCluster.Spec.Https.TlsKeystorePasswordSecretRef.Key,
+					},
+				},
+			}},
+			VolumeMounts: []corev1.VolumeMount{{
+				Name:      StaticContentVolumeName,
+				SubPath:   "generate-keystore.sh",
+				MountPath: "/opt/scripts/generate-keystore.sh",
+				ReadOnly:  true,
+			}, {
+				Name:      StroomTlsVolumeName,
+				MountPath: "/opt/tls",
+				ReadOnly:  true,
+			}, {
+				Name:      StroomKeystoreVolumeName,
+				MountPath: "/data",
+			}},
+		},
+		)
 	}
 
 	containers := []corev1.Container{{
@@ -438,74 +515,7 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 	}}
 
 	if !logSender.IsZero() {
-		destinationUrl := logSender.DestinationUrl
-		if destinationUrl == "" {
-			destinationUrl = stroomCluster.GetDatafeedUrl()
-		}
-
-		environmentName := logSender.EnvironmentName
-		if environmentName == "" {
-			environmentName = strings.ToUpper(stroomCluster.Name)
-		}
-
-		systemName := logSender.SystemName
-		if systemName == "" {
-			systemName = "Stroom"
-		}
-
-		// Set default resource limits if not specified
-		resources := logSender.Resources
-		if resources.Size() == 0 {
-			resources = corev1.ResourceRequirements{
-				Limits: map[corev1.ResourceName]resource.Quantity{
-					corev1.ResourceCPU:    resource.MustParse(LogSenderDefaultCpuLimit),
-					corev1.ResourceMemory: resource.MustParse(LogSenderDefaultMemoryLimit),
-				},
-			}
-		}
-
-		containers = append(containers, corev1.Container{
-			Name:            "log-sender",
-			Image:           logSender.Image.String(),
-			ImagePullPolicy: logSender.ImagePullPolicy,
-			SecurityContext: &logSender.SecurityContext,
-			Env: []corev1.EnvVar{{
-				Name:  "LOG_SENDER_SCRIPT",
-				Value: "/stroom-log-sender/send_to_stroom.sh",
-			}, {
-				Name:  "STROOM_DATAFEED_URL",
-				Value: destinationUrl,
-			}, {
-				Name:  "STROOM_BASE_LOGS_DIR",
-				Value: "/stroom-log-sender/log-volumes/stroom",
-			}, {
-				Name:  "STROOM_FILE_REGEX",
-				Value: `.*/[a-z]+-[0-9]+-[0-9]+-[0-9]+T[0-9]+:[0-9]+\.log(\.gz)?$`,
-			}, {
-				Name:  "STROOM_ENVIRONMENT_NAME",
-				Value: environmentName,
-			}, {
-				Name:  "STROOM_SYSTEM_NAME",
-				Value: systemName,
-			}, {
-				Name:  "STROOM_MAX_DELAY_SECS",
-				Value: "15",
-			}},
-			VolumeMounts: []corev1.VolumeMount{{
-				Name:      StroomNodePvcName,
-				SubPath:   "logs",
-				MountPath: "/stroom-log-sender/log-volumes/stroom",
-			}, {
-				Name:      "log-sender-configmap",
-				MountPath: "/stroom-log-sender/config",
-				ReadOnly:  true,
-			}, {
-				Name:      "log-sender-certs",
-				MountPath: "/stroom-log-sender/certs",
-				ReadOnly:  true,
-			}},
-			Resources: resources,
-		})
+		containers = append(containers, r.createLogSenderContainer(stroomCluster))
 	}
 
 	statefulSet := &appsv1.StatefulSet{
@@ -530,6 +540,7 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 					ServiceAccountName:            stroomCluster.GetBaseName(),
 					SecurityContext:               &nodeSet.PodSecurityContext,
 					TerminationGracePeriodSeconds: &stroomCluster.Spec.NodeTerminationPeriodSecs,
+					InitContainers:                initContainers,
 					Containers:                    containers,
 					Volumes:                       volumes,
 					NodeSelector:                  nodeSet.NodeSelector,
@@ -551,6 +562,87 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 	return statefulSet
 }
 
+func (r *StroomClusterReconciler) createLogSenderContainer(stroomCluster *stroomv1.StroomCluster) corev1.Container {
+	logSender := stroomCluster.Spec.LogSender
+
+	destinationUrl := logSender.DestinationUrl
+	if destinationUrl == "" {
+		destinationUrl = stroomCluster.GetDatafeedUrl()
+	}
+
+	environmentName := logSender.EnvironmentName
+	if environmentName == "" {
+		environmentName = strings.ToUpper(stroomCluster.Name)
+	}
+
+	systemName := logSender.SystemName
+	if systemName == "" {
+		systemName = "Stroom"
+	}
+
+	// Set default resource limits if not specified
+	resources := logSender.Resources
+	if resources.Size() == 0 {
+		resources = corev1.ResourceRequirements{
+			Limits: map[corev1.ResourceName]resource.Quantity{
+				corev1.ResourceCPU:    resource.MustParse(LogSenderDefaultCpuLimit),
+				corev1.ResourceMemory: resource.MustParse(LogSenderDefaultMemoryLimit),
+			},
+		}
+	}
+
+	logSenderVolumeMounts := []corev1.VolumeMount{
+		{
+			Name:      StroomNodePvcName,
+			SubPath:   "logs",
+			MountPath: "/stroom-log-sender/log-volumes/stroom",
+		}, {
+			Name:      LogSenderConfigMapName,
+			MountPath: "/stroom-log-sender/config",
+			ReadOnly:  true,
+		},
+	}
+
+	if !logSender.Tls.IsZero() {
+		logSenderVolumeMounts = append(logSenderVolumeMounts, corev1.VolumeMount{
+			Name:      LogSenderCertsVolumeName,
+			MountPath: "/stroom-log-sender/certs",
+			ReadOnly:  true,
+		})
+	}
+
+	return corev1.Container{
+		Name:            "log-sender",
+		Image:           logSender.Image.String(),
+		ImagePullPolicy: logSender.ImagePullPolicy,
+		SecurityContext: &logSender.SecurityContext,
+		Env: []corev1.EnvVar{{
+			Name:  "LOG_SENDER_SCRIPT",
+			Value: "/stroom-log-sender/send_to_stroom.sh",
+		}, {
+			Name:  "STROOM_DATAFEED_URL",
+			Value: destinationUrl,
+		}, {
+			Name:  "STROOM_BASE_LOGS_DIR",
+			Value: "/stroom-log-sender/log-volumes/stroom",
+		}, {
+			Name:  "STROOM_FILE_REGEX",
+			Value: `.*/[a-z]+-[0-9]+-[0-9]+-[0-9]+T[0-9]+:[0-9]+\.log(\.gz)?$`,
+		}, {
+			Name:  "STROOM_ENVIRONMENT_NAME",
+			Value: environmentName,
+		}, {
+			Name:  "STROOM_SYSTEM_NAME",
+			Value: systemName,
+		}, {
+			Name:  "STROOM_MAX_DELAY_SECS",
+			Value: "15",
+		}},
+		VolumeMounts: logSenderVolumeMounts,
+		Resources:    resources,
+	}
+}
+
 func (r *StroomClusterReconciler) appendConfigVolumeMounts(stroomCluster *stroomv1.StroomCluster, volumeMounts *[]corev1.VolumeMount) {
 	// If a Stroom node config override is provided, mount the existing ConfigMap
 	const configMountPath = "/stroom/config/config.yml"
@@ -564,7 +656,7 @@ func (r *StroomClusterReconciler) appendConfigVolumeMounts(stroomCluster *stroom
 	} else {
 		// Use the default config
 		*volumeMounts = append(*volumeMounts, corev1.VolumeMount{
-			Name:      "static-content",
+			Name:      StaticContentVolumeName,
 			SubPath:   "stroomcluster-config.yaml",
 			MountPath: configMountPath,
 			ReadOnly:  true,
@@ -686,8 +778,13 @@ func (r *StroomClusterReconciler) createIngresses(ctx context.Context, stroomClu
 		}
 
 		if nodeSet.Role != stroomv1.ProcessingNodeRole {
+			nginxBackendProtocol := "HTTP"
+			if !stroomCluster.Spec.Https.IsZero() {
+				nginxBackendProtocol = "HTTPS"
+			}
+
 			ingressAnnotations := map[string]string{
-				"nginx.ingress.kubernetes.io/backend-protocol": "HTTPS",
+				"nginx.ingress.kubernetes.io/backend-protocol": nginxBackendProtocol,
 				"nginx.ingress.kubernetes.io/affinity":         "cookie",
 				"nginx.ingress.kubernetes.io/affinity-mode":    "persistent",
 				"nginx.ingress.kubernetes.io/proxy-body-size":  "0", // Disable client request payload size checking
@@ -698,16 +795,16 @@ func (r *StroomClusterReconciler) createIngresses(ctx context.Context, stroomClu
 				ingressAnnotations[k] = v
 			}
 
-			//Apply any user-provided ingress labels
+			// Apply any user-provided ingress labels
 			ingressLabels := stroomCluster.GetLabels()
 			for k, v := range nodeSet.IngressLabels {
 				ingressLabels[k] = v
 			}
 
-			//Build ingress TLS object if TLS is enabled inside the cluster
+			// Build ingress TLS object if TLS is enabled inside the cluster
 			ingressTls := []netv1.IngressTLS{{}}
 			appPortName := AppHttpPortName
-			if stroomCluster.Spec.Https.Enabled {
+			if !stroomCluster.Spec.Https.IsZero() {
 				ingressTls = []netv1.IngressTLS{{
 					Hosts:      []string{ingressSettings.HostName},
 					SecretName: ingressSettings.SecretName,
@@ -736,37 +833,6 @@ func (r *StroomClusterReconciler) createIngresses(ctx context.Context, stroomClu
 						},
 					},
 				})
-
-			websocketIngressAnnotations := map[string]string{
-				"nginx.ingress.kubernetes.io/proxy-http-version": "1.1",
-				"nginx.ingress.kubernetes.io/configuration-snippet": "\n" +
-					"proxy_set_header Upgrade $http_upgrade;\n" +
-					"proxy_set_header Connection \"Upgrade\";\n",
-			}
-
-			// Apply any user-provided annotations
-			for k, v := range nodeSet.IngressAnnotations {
-				websocketIngressAnnotations[k] = v
-			}
-
-			ingresses = append(ingresses,
-				netv1.Ingress{
-					// WebSocket endpoint
-					ObjectMeta: metav1.ObjectMeta{
-						Name:        clusterName + "-websocket",
-						Namespace:   stroomCluster.Namespace,
-						Labels:      ingressLabels,
-						Annotations: websocketIngressAnnotations,
-					},
-					Spec: netv1.IngressSpec{
-						IngressClassName: &ingressSettings.ClassName,
-						TLS:              ingressTls,
-						Rules: []netv1.IngressRule{
-							r.createIngressRule(ingressSettings.HostName, netv1.PathTypePrefix, "/web-socket/", serviceName, appPortName, ingressSettings.PathTypeOverride),
-						},
-					},
-				},
-			)
 		}
 
 		if nodeSet.Role != stroomv1.FrontendNodeRole {
@@ -790,7 +856,7 @@ func (r *StroomClusterReconciler) createIngresses(ctx context.Context, stroomClu
 			//Build ingress TLS object if TLS is enabled inside the cluster
 			ingressTls := []netv1.IngressTLS{{}}
 			appPortName := AppHttpPortName
-			if stroomCluster.Spec.Https.Enabled {
+			if !stroomCluster.Spec.Https.IsZero() {
 				ingressTls = []netv1.IngressTLS{{
 					Hosts:      []string{ingressSettings.HostName},
 					SecretName: ingressSettings.SecretName,

@@ -1,10 +1,11 @@
-package controllers
+package controller
 
 import (
+	"time"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"time"
 )
 
 var _ = Describe("StroomTaskAutoscaler utilities", func() {
