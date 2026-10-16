@@ -126,7 +126,7 @@ func (r *StroomClusterReconciler) createStaticContentVolume(stroomCluster *stroo
 func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.StroomCluster, nodeSet *stroomv1.NodeSet, dbInfo *DatabaseConnectionInfo) *appsv1.StatefulSet {
 	logSender := stroomCluster.Spec.LogSender
 
-	env := append([]corev1.EnvVar{{
+	env := []corev1.EnvVar{{
 		Name:  "API_GATEWAY_HOST",
 		Value: stroomCluster.Spec.Ingress.HostName,
 	}, {
@@ -181,48 +181,9 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 	}, {
 		Name:  "STROOM_NODE_ROLE",
 		Value: string(nodeSet.Role),
-	}, {
-		Name:  "STROOM_JDBC_DRIVER_URL",
-		Value: dbInfo.ToJdbcConnectionString(stroomCluster.Spec.AppDatabaseName),
-	}, {
-		Name:  "STROOM_JDBC_DRIVER_CLASS_NAME",
-		Value: "com.mysql.cj.jdbc.Driver",
-	}, {
-		Name:  "STROOM_JDBC_DRIVER_USERNAME",
-		Value: dbInfo.UserName,
-	}, {
-		Name: "STROOM_JDBC_DRIVER_PASSWORD",
-		ValueFrom: &corev1.EnvVarSource{
-			SecretKeyRef: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{
-					Name: dbInfo.SecretName,
-				},
-				Key: dbInfo.UserName,
-			},
-		},
-	}, {
-		Name:  "STROOM_STATISTICS_JDBC_DRIVER_URL",
-		Value: dbInfo.ToJdbcConnectionString(stroomCluster.Spec.StatsDatabaseName),
-	}, {
-		Name:  "STROOM_STATISTICS_JDBC_DRIVER_CLASS_NAME",
-		Value: "com.mysql.cj.jdbc.Driver",
-	}, {
-		Name:  "STROOM_STATISTICS_JDBC_DRIVER_USERNAME",
-		Value: dbInfo.UserName,
-	}, {
-		Name: "STROOM_STATISTICS_JDBC_DRIVER_PASSWORD",
-		ValueFrom: &corev1.EnvVarSource{
-			SecretKeyRef: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{
-					Name: dbInfo.SecretName,
-				},
-				Key: dbInfo.UserName,
-			},
-		},
-	}, {
-		Name:  "STROOM_TEMP",
-		Value: "/stroom/tmp",
-	}}, stroomCluster.Spec.ExtraEnv...)
+	}}
+	env = append(env, r.getStroomCommonEnv(stroomCluster, dbInfo)...)
+	env = append(env, stroomCluster.Spec.ExtraEnv...)
 
 	// List the jobs that should be managed by the node startup and shutdown scripts.
 	// These are typically node role dependent. Frontend nodes for instance, shouldn't have the `Data Processor` node
@@ -662,6 +623,53 @@ func (r *StroomClusterReconciler) appendConfigVolumeMounts(stroomCluster *stroom
 			ReadOnly:  true,
 		})
 	}
+}
+
+// getStroomCommonEnv returns environment variables needed by any container running Stroom against the
+// cluster's databases, i.e. Stroom nodes and the API key Job
+func (r *StroomClusterReconciler) getStroomCommonEnv(stroomCluster *stroomv1.StroomCluster, dbInfo *DatabaseConnectionInfo) []corev1.EnvVar {
+	return []corev1.EnvVar{{
+		Name:  "STROOM_JDBC_DRIVER_URL",
+		Value: dbInfo.ToJdbcConnectionString(stroomCluster.Spec.AppDatabaseName),
+	}, {
+		Name:  "STROOM_JDBC_DRIVER_CLASS_NAME",
+		Value: "com.mysql.cj.jdbc.Driver",
+	}, {
+		Name:  "STROOM_JDBC_DRIVER_USERNAME",
+		Value: dbInfo.UserName,
+	}, {
+		Name: "STROOM_JDBC_DRIVER_PASSWORD",
+		ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{
+					Name: dbInfo.SecretName,
+				},
+				Key: dbInfo.UserName,
+			},
+		},
+	}, {
+		Name:  "STROOM_STATISTICS_JDBC_DRIVER_URL",
+		Value: dbInfo.ToJdbcConnectionString(stroomCluster.Spec.StatsDatabaseName),
+	}, {
+		Name:  "STROOM_STATISTICS_JDBC_DRIVER_CLASS_NAME",
+		Value: "com.mysql.cj.jdbc.Driver",
+	}, {
+		Name:  "STROOM_STATISTICS_JDBC_DRIVER_USERNAME",
+		Value: dbInfo.UserName,
+	}, {
+		Name: "STROOM_STATISTICS_JDBC_DRIVER_PASSWORD",
+		ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{
+					Name: dbInfo.SecretName,
+				},
+				Key: dbInfo.UserName,
+			},
+		},
+	}, {
+		Name:  "STROOM_TEMP",
+		Value: "/stroom/tmp",
+	}}
 }
 
 // getJvmOptions generates JVM options from the requested NodeSet resources.
