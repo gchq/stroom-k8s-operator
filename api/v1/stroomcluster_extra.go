@@ -7,6 +7,13 @@ const (
 	DeleteOnScaledownOnlyPolicy                                       = "DeleteOnScaledownOnly"
 )
 
+type IdentityProviderType string
+
+const (
+	InternalIdp IdentityProviderType = "INTERNAL_IDP"
+	ExternalIdp IdentityProviderType = "EXTERNAL_IDP"
+)
+
 type HttpsSettings struct {
 	// Name of the TLS secret containing the items `keystore.p12` and `truststore.p12`
 	TlsSecretName string `json:"tlsSecretName"`

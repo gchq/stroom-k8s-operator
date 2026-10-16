@@ -6,6 +6,7 @@ import (
 )
 
 // StroomClusterSpec defines the desired state of StroomCluster
+// +kubebuilder:validation:XValidation:rule="self.identityProviderType != 'EXTERNAL_IDP' || has(self.openId)",message="openId is required when identityProviderType is EXTERNAL_IDP"
 type StroomClusterSpec struct {
 	// +kubebuilder:validation:Required
 	Image           Image             `json:"image"`
@@ -25,8 +26,13 @@ type StroomClusterSpec struct {
 	// Override the Stroom configuration provided to each node, by providing the name of an existing `ConfigMap`
 	// in the same namespace as the `StroomCluster`
 	ConfigMapRef ConfigMapRef `json:"configMapRef,omitempty"`
-	// Configures OpenID to enable operator components to query the Stroom API
-	OpenId OpenIdConfiguration `json:"openId"`
+	// Configures OpenID to enable operator components to query the Stroom API - Only needed with EXTERNAL_IDP
+	// +kubebuilder:validation:Optional
+	OpenId *OpenIdConfiguration `json:"openId,omitempty"`
+	// INTERNAL_IDP means the operator creates and manages an API key; EXTERNAL_IDP requires openId
+	// +kubebuilder:validation:Enum=INTERNAL_IDP;EXTERNAL_IDP
+	// +kubebuilder:default:=INTERNAL_IDP
+	IdentityProviderType IdentityProviderType `json:"identityProviderType,omitempty"`
 	// HTTPS settings. Omit to use plain-text (HTTP)
 	// +kubebuilder:validation:Optional
 	Https HttpsSettings `json:"https,omitempty"`

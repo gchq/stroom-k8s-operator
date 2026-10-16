@@ -18,6 +18,7 @@ package v1
 
 import (
 	"fmt"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -49,6 +50,10 @@ func (in *StroomCluster) GetBaseName() string {
 
 func (in *StroomCluster) GetStaticContentConfigMapName() string {
 	return fmt.Sprintf("%v-static-content", in.GetBaseName())
+}
+
+func (in *StroomCluster) GetApiKeySecretName() string {
+	return fmt.Sprintf("%v-api-key", in.GetBaseName())
 }
 
 func (in *StroomCluster) GetNodeSetName(nodeSet *NodeSet) string {
