@@ -56,6 +56,10 @@ func (in *StroomCluster) GetApiKeySecretName() string {
 	return fmt.Sprintf("%v-api-key", in.GetBaseName())
 }
 
+func (in *StroomCluster) GetApiKeyJobServiceAccountName() string {
+	return fmt.Sprintf("%v-api-key-job", in.GetBaseName())
+}
+
 func (in *StroomCluster) GetNodeSetName(nodeSet *NodeSet) string {
 	return fmt.Sprintf("%v-node-%v", in.GetBaseName(), nodeSet.Name)
 }

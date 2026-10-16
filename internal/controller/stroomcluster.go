@@ -183,6 +183,7 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 		Value: string(nodeSet.Role),
 	}}
 	env = append(env, r.getStroomCommonEnv(stroomCluster, dbInfo)...)
+	env = append(env, r.getIdentityProviderEnv(stroomCluster))
 	env = append(env, stroomCluster.Spec.ExtraEnv...)
 
 	// List the jobs that should be managed by the node startup and shutdown scripts.
@@ -294,16 +295,7 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 
 	// If a Stroom node config override is provided, create a volume for it
 	if !stroomCluster.Spec.ConfigMapRef.IsZero() {
-		volumes = append(volumes, corev1.Volume{
-			Name: "config-override",
-			VolumeSource: corev1.VolumeSource{
-				ConfigMap: &corev1.ConfigMapVolumeSource{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: stroomCluster.Spec.ConfigMapRef.Name,
-					},
-				},
-			},
-		})
+		volumes = append(volumes, *r.createConfigOverrideVolume(stroomCluster))
 	}
 
 	volumeMounts := []corev1.VolumeMount{{
@@ -622,6 +614,33 @@ func (r *StroomClusterReconciler) appendConfigVolumeMounts(stroomCluster *stroom
 			MountPath: configMountPath,
 			ReadOnly:  true,
 		})
+	}
+}
+
+// createConfigOverrideVolume creates a volume for the user-provided Stroom config ConfigMap, if one is specified
+func (r *StroomClusterReconciler) createConfigOverrideVolume(stroomCluster *stroomv1.StroomCluster) *corev1.Volume {
+	return &corev1.Volume{
+		Name: "config-override",
+		VolumeSource: corev1.VolumeSource{
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{
+					Name: stroomCluster.Spec.ConfigMapRef.Name,
+				},
+			},
+		},
+	}
+}
+
+// getIdentityProviderEnv tells Stroom which identity provider to use, matching the operator's own behaviour
+func (r *StroomClusterReconciler) getIdentityProviderEnv(stroomCluster *stroomv1.StroomCluster) corev1.EnvVar {
+	idpType := stroomCluster.Spec.IdentityProviderType
+	if idpType == "" {
+		// The CRD default wasn't applied, e.g. this operator is running against an older CRD
+		idpType = stroomv1.InternalIdp
+	}
+	return corev1.EnvVar{
+		Name:  "IDENTITY_PROVIDER_TYPE",
+		Value: string(idpType),
 	}
 }
 

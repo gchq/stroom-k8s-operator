@@ -32,7 +32,7 @@ cd /stroom
   --grantPermission stroom-k8s-operator "Manage Tasks"
 
 # Create api key for the stroom cluster to use
-./start.sh create_api_key -u stroom-operator -n "$key_name" -e "$expiry_days" -o /tmp/api-key/key
+./start.sh create_api_key -u stroom-k8s-operator -n "$keyname" -e "$expiry_days" -o "$keyfile"
 
 sa_dir=/var/run/secrets/kubernetes.io/serviceaccount
 secret_url="https://kubernetes.default.svc/api/v1/namespaces/${POD_NAMESPACE}/secrets/${STROOM_API_KEY_SECRET_NAME}"
