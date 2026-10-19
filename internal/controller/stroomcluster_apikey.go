@@ -232,12 +232,6 @@ func (r *StroomClusterReconciler) ensureApiKey(ctx context.Context, stroomCluste
 		return ctrl.Result{}, nil
 	}
 
-	// The Job runs DB migrations and writes to the DB, so wait until the DB accepts connections
-	if err := PingDatabase(r, ctx, dbInfo, stroomCluster.Namespace, stroomCluster.Spec.AppDatabaseName); err != nil {
-		logger.Info("Waiting for the database before creating an API key", "Error", err.Error())
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-
 	if err := r.reconcileApiKeyJobRbac(ctx, stroomCluster); err != nil {
 		return ctrl.Result{}, err
 	}

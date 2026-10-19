@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	stroomv1 "github.com/gradata-systems/stroom-k8s-operator/api/v1"
@@ -78,17 +77,4 @@ func CloseDatabase(database *sql.DB) {
 	if err := database.Close(); err != nil {
 		// Handle silently
 	}
-}
-
-// PingDatabase checks the database accepts connections. OpenDatabase alone doesn't connect.
-func PingDatabase(client client.Reader, ctx context.Context, dbInfo *DatabaseConnectionInfo, secretNamespace string, databaseName string) error {
-	db, err := OpenDatabase(client, ctx, dbInfo, secretNamespace, databaseName)
-	if err != nil {
-		return err
-	}
-	defer CloseDatabase(db)
-
-	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	return db.PingContext(pingCtx)
 }
