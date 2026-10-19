@@ -107,8 +107,10 @@ func (r *StroomClusterReconciler) createApiKeyJob(stroomCluster *stroomv1.Stroom
 					Labels: stroomCluster.GetLabels(),
 				},
 				Spec: corev1.PodSpec{
-					RestartPolicy:      corev1.RestartPolicyNever,
-					ServiceAccountName: stroomCluster.GetApiKeyJobServiceAccountName(),
+					RestartPolicy: corev1.RestartPolicyNever,
+					// Run as the Stroom node ServiceAccount, so the Job is subject to the same security constraints (e.g.
+					// OpenShift SCCs) as the nodes, without needing any extra setup
+					ServiceAccountName: stroomCluster.GetBaseName(),
 					SecurityContext:    &nodeSet.PodSecurityContext,
 					NodeSelector:       nodeSet.NodeSelector,
 					Affinity:           &nodeSet.Affinity,
@@ -145,25 +147,11 @@ func (r *StroomClusterReconciler) createApiKeyJob(stroomCluster *stroomv1.Stroom
 	return job
 }
 
-// createApiKeyJobServiceAccount creates the identity the API key Job runs as
-func (r *StroomClusterReconciler) createApiKeyJobServiceAccount(stroomCluster *stroomv1.StroomCluster) *corev1.ServiceAccount {
-	serviceAccount := &corev1.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      stroomCluster.GetApiKeyJobServiceAccountName(),
-			Namespace: stroomCluster.Namespace,
-			Labels:    stroomCluster.GetLabels(),
-		},
-	}
-
-	ctrl.SetControllerReference(stroomCluster, serviceAccount, r.Scheme)
-	return serviceAccount
-}
-
-// createApiKeyJobRole allows the API key Job to write the API key into the cluster's API key Secret, and nothing else
-func (r *StroomClusterReconciler) createApiKeyJobRole(stroomCluster *stroomv1.StroomCluster) *rbacv1.Role {
+// createApiKeyWriterRole allows the API key Job to write the API key into the cluster's API key Secret, and nothing else
+func (r *StroomClusterReconciler) createApiKeyWriterRole(stroomCluster *stroomv1.StroomCluster) *rbacv1.Role {
 	role := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      stroomCluster.GetApiKeyJobServiceAccountName(),
+			Name:      stroomCluster.GetApiKeyWriterRoleName(),
 			Namespace: stroomCluster.Namespace,
 			Labels:    stroomCluster.GetLabels(),
 		},
@@ -179,9 +167,9 @@ func (r *StroomClusterReconciler) createApiKeyJobRole(stroomCluster *stroomv1.St
 	return role
 }
 
-// createApiKeyJobRoleBinding grants the API key Job's Role to its ServiceAccount
-func (r *StroomClusterReconciler) createApiKeyJobRoleBinding(stroomCluster *stroomv1.StroomCluster) *rbacv1.RoleBinding {
-	name := stroomCluster.GetApiKeyJobServiceAccountName()
+// createApiKeyWriterRoleBinding grants the API key Job's Role to clusters ServiceAccount
+func (r *StroomClusterReconciler) createApiKeyWriterRoleBinding(stroomCluster *stroomv1.StroomCluster) *rbacv1.RoleBinding {
+	name := stroomCluster.GetApiKeyWriterRoleName()
 	roleBinding := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -195,7 +183,7 @@ func (r *StroomClusterReconciler) createApiKeyJobRoleBinding(stroomCluster *stro
 		},
 		Subjects: []rbacv1.Subject{{
 			Kind:      rbacv1.ServiceAccountKind,
-			Name:      name,
+			Name:      stroomCluster.GetBaseName(),
 			Namespace: stroomCluster.Namespace,
 		}},
 	}
@@ -232,7 +220,7 @@ func (r *StroomClusterReconciler) ensureApiKey(ctx context.Context, stroomCluste
 		return ctrl.Result{}, nil
 	}
 
-	if err := r.reconcileApiKeyJobRbac(ctx, stroomCluster); err != nil {
+	if err := r.reconcileApiKeyRbac(ctx, stroomCluster); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -295,19 +283,9 @@ func (r *StroomClusterReconciler) createApiKeySecret(stroomCluster *stroomv1.Str
 	return secret
 }
 
-// reconcileApiKeyJobRbac creates or updates the ServiceAccount, Role and RoleBinding used by the API key Job
-func (r *StroomClusterReconciler) reconcileApiKeyJobRbac(ctx context.Context, stroomCluster *stroomv1.StroomCluster) error {
-	newServiceAccount := r.createApiKeyJobServiceAccount(stroomCluster)
-	serviceAccount := corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: newServiceAccount.Name, Namespace: newServiceAccount.Namespace}}
-	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, &serviceAccount, func() error {
-		serviceAccount.Labels = newServiceAccount.Labels
-		serviceAccount.OwnerReferences = newServiceAccount.OwnerReferences
-		return nil
-	}); err != nil {
-		return err
-	}
-
-	newRole := r.createApiKeyJobRole(stroomCluster)
+// reconcileApiKeyRbac creates or updates the Role and RoleBinding that allow the API key Job to write the API key Secret
+func (r *StroomClusterReconciler) reconcileApiKeyRbac(ctx context.Context, stroomCluster *stroomv1.StroomCluster) error {
+	newRole := r.createApiKeyWriterRole(stroomCluster)
 	role := rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: newRole.Name, Namespace: newRole.Namespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, &role, func() error {
 		role.Labels = newRole.Labels
@@ -318,7 +296,7 @@ func (r *StroomClusterReconciler) reconcileApiKeyJobRbac(ctx context.Context, st
 		return err
 	}
 
-	newRoleBinding := r.createApiKeyJobRoleBinding(stroomCluster)
+	newRoleBinding := r.createApiKeyWriterRoleBinding(stroomCluster)
 	roleBinding := rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: newRoleBinding.Name, Namespace: newRoleBinding.Namespace}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, &roleBinding, func() error {
 		roleBinding.Labels = newRoleBinding.Labels
