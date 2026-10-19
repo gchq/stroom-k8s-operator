@@ -2,9 +2,10 @@
 
 api_log_file='/stroom/logs/k8s/api.log'
 auth_token_file='/stroom/auth/token'
+api_key_file='/stroom/api-key/apiKey'
 token_expiry_threshold_seconds=10
 base_url="http://localhost:${STROOM_APP_HTTP_PORT}/api"
-token_request_path='authproxy/v1/noauth/fetchClientCredsToken'
+token_request_path='authproxy/v1/fetchClientCredsToken'
 http_response_pattern='^(.+?)\s*http_code=([0-9]+)$'
 
 #
@@ -84,14 +85,20 @@ function call_api() {
   sub_path=$1
   shift 1
 
-  # Request a new auth token if we don't currently have one or the current token has expired
-  get_auth_token
+  # Use the operator-managed API key if one is mounted (INTERNAL_IDP). It is read on every call, so a rotated key is
+  # picked up without a restart. Otherwise, fetch an OAuth2 token from the external IdP (EXTERNAL_IDP).
+  if [ -s "$api_key_file" ]; then
+    auth_header="Authorization: Bearer $(cat "$api_key_file")"
+  else
+    get_auth_token
+    auth_header="Authorization: Bearer $(cat "$auth_token_file")"
+  fi
 
   url="$base_url/$sub_path"
   response=$(curl -s "$url" \
     -H 'Accept: application/json' \
     -H 'Content-Type: application/json' \
-    -H "Authorization:Bearer $(cat $auth_token_file)" \
+    -H "$auth_header" \
     -w '\nhttp_code=%{http_code}' \
     "$@")
 
@@ -107,6 +114,7 @@ function call_api() {
     exit 1
   fi
 }
+
 
 #
 # Enable or disable Stroom processing jobs for the specified node
