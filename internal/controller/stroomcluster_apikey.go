@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	stroomv1 "github.com/gradata-systems/stroom-k8s-operator/api/v1"
@@ -50,6 +51,20 @@ func (r *StroomClusterReconciler) createApiKeyJob(stroomCluster *stroomv1.Stroom
 		// The CLI needs far less memory than a Stroom node
 		Name:  "JAVA_OPTS",
 		Value: "-Xms128m -Xmx1g",
+	}, {
+		// Stroom config derives URIs (including the processing user's token issuer) from the node identity, so the Job
+		// presents itself as the first node of the first NodeSet
+		Name:  "STROOM_NODE",
+		Value: stroomCluster.GetNodeSetName(nodeSet) + "-0",
+	}, {
+		Name:  "POD_HOSTNAME",
+		Value: stroomCluster.GetNodeSetName(nodeSet) + "-0",
+	}, {
+		Name:  "POD_SUBDOMAIN",
+		Value: fmt.Sprintf("%v.%v.svc.cluster.local", stroomCluster.GetNodeSetHeadlessServiceName(nodeSet), stroomCluster.Namespace),
+	}, {
+		Name:  "API_GATEWAY_HOST",
+		Value: stroomCluster.Spec.Ingress.HostName,
 	}}...)
 
 	volumes := []corev1.Volume{
