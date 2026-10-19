@@ -1,13 +1,21 @@
 package controller
 
 import (
+	"context"
+	"time"
+
 	stroomv1 "github.com/gradata-systems/stroom-k8s-operator/api/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 const (
@@ -15,6 +23,7 @@ const (
 	ApiKeySecretDataKey    = "apiKey"
 	ApiKeyJobScriptName    = "create-stroom-api-key.sh"
 	ApiKeyJobContainerName = "create-api-key"
+	ApiKeyJobRetryDelay    = 5 * time.Minute
 )
 
 // createApiKeyJob creates a Job that uses the Stroom CLI to create an API key for the operator, then writes it
@@ -193,4 +202,167 @@ func (r *StroomClusterReconciler) createApiKeyJobRoleBinding(stroomCluster *stro
 
 	ctrl.SetControllerReference(stroomCluster, roleBinding, r.Scheme)
 	return roleBinding
+}
+
+// ensureApiKey makes sure the cluster's API key Secret contains a key, running the API key Job to create one if
+// needed. Only applies when the cluster uses Stroom's internal identity provider.
+// A non-zero Result means provisioning is still in progress, and the caller should return it.
+func (r *StroomClusterReconciler) ensureApiKey(ctx context.Context, stroomCluster *stroomv1.StroomCluster, dbInfo *DatabaseConnectionInfo) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	if stroomCluster.Spec.GetIdentityProviderType() != stroomv1.InternalIdp {
+		return ctrl.Result{}, nil
+	}
+
+	// The Secret is created empty and filled in by the Job. It is create-only, so the operator never overwrites the key.
+	secret := corev1.Secret{}
+	secretName := types.NamespacedName{Namespace: stroomCluster.Namespace, Name: stroomCluster.GetApiKeySecretName()}
+	if err := r.Get(ctx, secretName, &secret); err != nil {
+		if !errors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
+		newSecret := r.createApiKeySecret(stroomCluster)
+		logger.Info("Creating API key Secret", "Namespace", newSecret.Namespace, "Name", newSecret.Name)
+		if err := r.Create(ctx, newSecret); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
+	if len(secret.Data[ApiKeySecretDataKey]) > 0 {
+		return ctrl.Result{}, nil
+	}
+
+	// The Job runs DB migrations and writes to the DB, so wait until the DB accepts connections
+	if err := PingDatabase(r, ctx, dbInfo, stroomCluster.Namespace, stroomCluster.Spec.AppDatabaseName); err != nil {
+		logger.Info("Waiting for the database before creating an API key", "Error", err.Error())
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	if err := r.reconcileApiKeyJobRbac(ctx, stroomCluster); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// Jobs can't be changed once created, so get or create, never update
+	job := batchv1.Job{}
+	jobName := types.NamespacedName{Namespace: stroomCluster.Namespace, Name: stroomCluster.GetCliJobName("api-key")}
+	if err := r.Get(ctx, jobName, &job); err != nil {
+		if !errors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
+		newJob := r.createApiKeyJob(stroomCluster, dbInfo)
+		logger.Info("Creating API key Job", "Namespace", newJob.Namespace, "Name", newJob.Name)
+		if err := r.Create(ctx, newJob); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	finished := getJobFinishedCondition(&job)
+	switch {
+	case finished == nil:
+		// Still running
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+
+	case finished.Type == batchv1.JobComplete:
+		// The Job succeeded earlier, but the Secret is empty again (e.g. it was deleted), so run it again
+		logger.Info("API key Secret is empty. Re-running API key Job", "Name", job.Name)
+		if err := r.deleteJob(ctx, &job); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+
+	default:
+		// Failed. Keep it for a while so its logs can be inspected, then retry.
+		if wait := time.Until(finished.LastTransitionTime.Add(ApiKeyJobRetryDelay)); wait > 0 {
+			r.Recorder.Eventf(stroomCluster, &job, corev1.EventTypeWarning, "ApiKeyJobFailed", "CreateApiKey",
+				"API key Job failed, retrying in %v. See: kubectl logs -n %v job/%v", wait.Round(time.Second), job.Namespace, job.Name)
+			return ctrl.Result{RequeueAfter: wait}, nil
+		}
+		logger.Info("Retrying failed API key Job", "Name", job.Name)
+		if err := r.deleteJob(ctx, &job); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+}
+
+// createApiKeySecret creates the empty Secret the API key Job writes the key into
+func (r *StroomClusterReconciler) createApiKeySecret(stroomCluster *stroomv1.StroomCluster) *corev1.Secret {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      stroomCluster.GetApiKeySecretName(),
+			Namespace: stroomCluster.Namespace,
+			Labels:    stroomCluster.GetLabels(),
+		},
+		Type: corev1.SecretTypeOpaque,
+	}
+
+	ctrl.SetControllerReference(stroomCluster, secret, r.Scheme)
+	return secret
+}
+
+// reconcileApiKeyJobRbac creates or updates the ServiceAccount, Role and RoleBinding used by the API key Job
+func (r *StroomClusterReconciler) reconcileApiKeyJobRbac(ctx context.Context, stroomCluster *stroomv1.StroomCluster) error {
+	newServiceAccount := r.createApiKeyJobServiceAccount(stroomCluster)
+	serviceAccount := corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: newServiceAccount.Name, Namespace: newServiceAccount.Namespace}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, &serviceAccount, func() error {
+		serviceAccount.Labels = newServiceAccount.Labels
+		serviceAccount.OwnerReferences = newServiceAccount.OwnerReferences
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	newRole := r.createApiKeyJobRole(stroomCluster)
+	role := rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: newRole.Name, Namespace: newRole.Namespace}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, &role, func() error {
+		role.Labels = newRole.Labels
+		role.OwnerReferences = newRole.OwnerReferences
+		role.Rules = newRole.Rules
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	newRoleBinding := r.createApiKeyJobRoleBinding(stroomCluster)
+	roleBinding := rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: newRoleBinding.Name, Namespace: newRoleBinding.Namespace}}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, &roleBinding, func() error {
+		roleBinding.Labels = newRoleBinding.Labels
+		roleBinding.OwnerReferences = newRoleBinding.OwnerReferences
+		roleBinding.RoleRef = newRoleBinding.RoleRef
+		roleBinding.Subjects = newRoleBinding.Subjects
+		return nil
+	})
+	return err
+}
+
+// getJobFinishedCondition returns the Job's Complete or Failed condition, or nil if it is still running
+func getJobFinishedCondition(job *batchv1.Job) *batchv1.JobCondition {
+	for i := range job.Status.Conditions {
+		condition := &job.Status.Conditions[i]
+		if (condition.Type == batchv1.JobComplete || condition.Type == batchv1.JobFailed) && condition.Status == corev1.ConditionTrue {
+			return condition
+		}
+	}
+	return nil
+}
+
+// deleteJob deletes a Job along with its pods
+func (r *StroomClusterReconciler) deleteJob(ctx context.Context, job *batchv1.Job) error {
+	// Without Background propagation, deleting a Job leaves its pods behind
+	err := r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground))
+	return client.IgnoreNotFound(err)
+}
+
+// warnOnIdentityProviderConflict emits a Warning Event if ExtraEnv sets IDENTITY_PROVIDER_TYPE differently from
+// spec.identityProviderType, as Stroom would then use a different identity provider to the one the operator expects
+func (r *StroomClusterReconciler) warnOnIdentityProviderConflict(stroomCluster *stroomv1.StroomCluster) {
+	expected := string(stroomCluster.Spec.GetIdentityProviderType())
+	for _, envVar := range stroomCluster.Spec.ExtraEnv {
+		if envVar.Name == "IDENTITY_PROVIDER_TYPE" && (envVar.ValueFrom != nil || envVar.Value != expected) {
+			r.Recorder.Eventf(stroomCluster, nil, corev1.EventTypeWarning, "IdentityProviderTypeConflict", "Reconcile",
+				"extraEnv sets IDENTITY_PROVIDER_TYPE, overriding spec.identityProviderType (%v). "+
+					"Set spec.identityProviderType instead and remove it from extraEnv", expected)
+		}
+	}
 }

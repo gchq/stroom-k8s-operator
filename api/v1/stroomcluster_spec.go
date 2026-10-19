@@ -118,3 +118,12 @@ func (in *TlsSettings) IsZero() bool {
 
 	return in.SecretName == ""
 }
+
+// GetIdentityProviderType returns the identity provider type, defaulting to INTERNAL_IDP if unset, e.g. when the
+// operator is running against an older CRD that didn't apply the default
+func (in *StroomClusterSpec) GetIdentityProviderType() IdentityProviderType {
+	if in.IdentityProviderType == "" {
+		return InternalIdp
+	}
+	return in.IdentityProviderType
+}

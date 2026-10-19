@@ -633,14 +633,9 @@ func (r *StroomClusterReconciler) createConfigOverrideVolume(stroomCluster *stro
 
 // getIdentityProviderEnv tells Stroom which identity provider to use, matching the operator's own behaviour
 func (r *StroomClusterReconciler) getIdentityProviderEnv(stroomCluster *stroomv1.StroomCluster) corev1.EnvVar {
-	idpType := stroomCluster.Spec.IdentityProviderType
-	if idpType == "" {
-		// The CRD default wasn't applied, e.g. this operator is running against an older CRD
-		idpType = stroomv1.InternalIdp
-	}
 	return corev1.EnvVar{
 		Name:  "IDENTITY_PROVIDER_TYPE",
-		Value: string(idpType),
+		Value: string(stroomCluster.Spec.GetIdentityProviderType()),
 	}
 }
 
