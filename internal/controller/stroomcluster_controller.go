@@ -190,9 +190,14 @@ func (r *StroomClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	r.warnOnIdentityProviderConflict(&stroomCluster)
 
-	// For INTERNAL_IDP, make sure the operator has an API key before any Stroom nodes need it
-	if result, err := r.ensureApiKey(ctx, &stroomCluster, &dbInfo); err != nil || !result.IsZero() {
-		return result, err
+	// For INTERNAL_IDP, make sure the operator has a valid API key before any Stroom nodes need it.
+	// apiKeyResult schedules the next key check, and is returned once the rest of the cluster is reconciled.
+	apiKeyReady, apiKeyResult, err := r.ensureApiKey(ctx, &stroomCluster, &dbInfo)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !apiKeyReady {
+		return apiKeyResult, nil
 	}
 
 	// Query the StroomCluster StatefulSet and if it doesn't exist, create it
@@ -290,7 +295,7 @@ func (r *StroomClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		logger.Info("Ingress reconciled", "Result", operationResult, "Namespace", existingIngress.Namespace, "Name", existingIngress.Name)
 	}
 
-	return ctrl.Result{}, nil
+	return apiKeyResult, nil
 }
 
 func (r *StroomClusterReconciler) deletePvcs(ctx context.Context, stroomCluster *stroomv1.StroomCluster, nodeSet *stroomv1.NodeSet, oldReplicaCount int32, newReplicaCount int32) error {

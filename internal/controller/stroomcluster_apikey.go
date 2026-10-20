@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	stroomv1 "github.com/gradata-systems/stroom-k8s-operator/api/v1"
@@ -25,6 +26,13 @@ const (
 	ApiKeyJobScriptName    = "create-stroom-api-key.sh"
 	ApiKeyJobContainerName = "create-api-key"
 	ApiKeyJobRetryDelay    = 5 * time.Minute
+	// Annotation the API key Job sets on the Secret: the key's expiry time in epoch seconds.
+	// Must match the annotation written by the API key script.
+	ApiKeyExpiresAnnotation = "stroom.gchq.github.io/api-key-expires"
+	// How long before expiry the API key is replaced. Stroom warns about keys within 30 days of expiry, so renew earlier.
+	ApiKeyRenewBefore = 35 * 24 * time.Hour
+	// Upper limit on how long to wait before checking the API key again
+	ApiKeyMaxCheckInterval = 24 * time.Hour
 )
 
 // createApiKeyJob creates a Job that uses the Stroom CLI to create an API key for the operator, then writes it
@@ -207,14 +215,15 @@ func (r *StroomClusterReconciler) createApiKeyWriterRoleBinding(stroomCluster *s
 	return roleBinding
 }
 
-// ensureApiKey makes sure the cluster's API key Secret contains a key, running the API key Job to create one if
-// needed. Only applies when the cluster uses Stroom's internal identity provider.
-// A non-zero Result means provisioning is still in progress, and the caller should return it.
-func (r *StroomClusterReconciler) ensureApiKey(ctx context.Context, stroomCluster *stroomv1.StroomCluster, dbInfo *DatabaseConnectionInfo) (ctrl.Result, error) {
+// ensureApiKey makes sure the cluster's API key Secret holds a key that isn't due to expire, running the API key Job to
+// create one when needed. Only applies when the cluster uses Stroom's internal identity provider.
+// Returns whether a usable key exists. If not, the caller should return the Result straight away. If so, the Result
+// schedules the next check (e.g. key renewal), and the caller should return it once the rest of the cluster is reconciled.
+func (r *StroomClusterReconciler) ensureApiKey(ctx context.Context, stroomCluster *stroomv1.StroomCluster, dbInfo *DatabaseConnectionInfo) (bool, ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	if stroomCluster.Spec.GetIdentityProviderType() != stroomv1.InternalIdp {
-		return ctrl.Result{}, nil
+		return true, ctrl.Result{}, nil
 	}
 
 	// The Secret is created empty and filled in by the Job. It is create-only, so the operator never overwrites the key.
@@ -222,18 +231,44 @@ func (r *StroomClusterReconciler) ensureApiKey(ctx context.Context, stroomCluste
 	secretName := types.NamespacedName{Namespace: stroomCluster.Namespace, Name: stroomCluster.GetApiKeySecretName()}
 	if err := r.Get(ctx, secretName, &secret); err != nil {
 		if !errors.IsNotFound(err) {
-			return ctrl.Result{}, err
+			return false, ctrl.Result{}, err
 		}
 		newSecret := r.createApiKeySecret(stroomCluster)
 		logger.Info("Creating API key Secret", "Namespace", newSecret.Namespace, "Name", newSecret.Name)
 		if err := r.Create(ctx, newSecret); err != nil {
-			return ctrl.Result{}, err
+			return false, ctrl.Result{}, err
 		}
-		return ctrl.Result{RequeueAfter: time.Second}, nil
+		return false, ctrl.Result{RequeueAfter: time.Second}, nil
 	}
-	if len(secret.Data[ApiKeySecretDataKey]) > 0 {
-		return ctrl.Result{}, nil
+
+	hasKey := len(secret.Data[ApiKeySecretDataKey]) > 0
+	renewAt := getApiKeyRenewalTime(&secret)
+	if hasKey && time.Now().Before(renewAt) {
+		// The key is valid. Check again when it's due for renewal, or within a day, whichever is sooner.
+		return true, ctrl.Result{RequeueAfter: min(time.Until(renewAt), ApiKeyMaxCheckInterval)}, nil
 	}
+
+	if hasKey {
+		logger.Info("API key is due for renewal", "RenewAt", renewAt)
+	}
+	result, err := r.runApiKeyJob(ctx, stroomCluster, dbInfo)
+	// While renewing, the current key is still valid, so the rest of the cluster can still be reconciled
+	return hasKey, result, err
+}
+
+// getApiKeyRenewalTime returns when the Secret's API key should be replaced. If the key's expiry is unknown, it returns
+// the zero time, meaning the key is due for renewal now, so it's replaced with one whose expiry is known.
+func getApiKeyRenewalTime(secret *corev1.Secret) time.Time {
+	expires, err := strconv.ParseInt(secret.Annotations[ApiKeyExpiresAnnotation], 10, 64)
+	if err != nil {
+		return time.Time{}
+	}
+	return time.Unix(expires, 0).Add(-ApiKeyRenewBefore)
+}
+
+// runApiKeyJob runs the API key Job to completion, creating it if needed and retrying it if it fails
+func (r *StroomClusterReconciler) runApiKeyJob(ctx context.Context, stroomCluster *stroomv1.StroomCluster, dbInfo *DatabaseConnectionInfo) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
 
 	if err := r.reconcileApiKeyRbac(ctx, stroomCluster); err != nil {
 		return ctrl.Result{}, err
