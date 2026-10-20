@@ -19,7 +19,7 @@ resources:
 
 images:
   - name: controller
-    newName: 'gradata/stroom-k8s-operator'
+    newName: 'gchq/stroom-k8s-operator'
     newTag: ''
 
 patches:

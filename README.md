@@ -39,19 +39,20 @@ This project was built with the Operator SDK, which bundles Kubernetes resource 
 # Installation
 
 ## Prerequisites
-1. Kubernetes cluster running version >= v1.20
+1. Kubernetes cluster running version >= v1.25
 2. Helm >= v3.8.0
-2. [metrics-server](https://github.com/kubernetes-sigs/metrics-server) (pre-installed with some K8s distributions)
+3. [metrics-server](https://github.com/kubernetes-sigs/metrics-server) (pre-installed with some K8s distributions)
+4. Stroom Application version >= 7.13
 
 ## (Optional) Air-Gap Preparation
 1. Pull Helm charts for offline use. The following commands each produce a `.tar.gz` file containing the latest version of the latest Stroom operator Helm charts:
    ```shell
-   helm pull oci://ghcr.io/gradata-systems/helm-charts/stroom-operator-crds
-   helm pull oci://ghcr.io/gradata-systems/helm-charts/stroom-operator
+   helm pull oci://ghcr.io/gchq/helm-charts/stroom-operator-crds
+   helm pull oci://ghcr.io/gchq/helm-charts/stroom-operator
    ```
-2. Pull all images in the [offline image list](https://raw.githubusercontent.com/gradata-systems/stroom-k8s-operator/master/deploy/images.txt) locally. The following script block saves all images in `images.txt` to a file `images.tar.gz` in the current directory:
+2. Pull all images in the [offline image list](https://raw.githubusercontent.com/gchq/stroom-k8s-operator/master/deploy/images.txt) locally. The following script block saves all images in `images.txt` to a file `images.tar.gz` in the current directory:
    ```shell
-   images=$(curl -s 'https://raw.githubusercontent.com/gradata-systems/stroom-k8s-operator/master/deploy/images.txt') && \
+   images=$(curl -s 'https://raw.githubusercontent.com/gchq/stroom-k8s-operator/master/deploy/images.txt') && \
    printf %s "$images" | \
    while IFS= read -r line; do \
    docker pull $line; \
@@ -67,21 +68,21 @@ The operator requires two Helm charts to be installed, in order to function. The
 ### 1. stroom-operator-crds
 ```shell
 helm install -n stroom-operator-system --create-namespace stroom-operator-crds \
-oci://ghcr.io/gradata-systems/helm-charts/stroom-operator-crds
+oci://ghcr.io/gchq/helm-charts/stroom-operator-crds
 ```
 
 ### 2. stroom-operator
 ```shell
 helm install -n stroom-operator-system stroom-operator \
-oci://ghcr.io/gradata-systems/helm-charts/stroom-operator
+oci://ghcr.io/gchq/helm-charts/stroom-operator
 ```
 The operator will be deployed to namespace `stroom-operator-system`. You can monitor its progress by watching the `Pod` named `stroom-operator-controller-manager`. Once it reaches `Ready` state, you can deploy a Stroom cluster.
 
 #### Air-Gap Deployment
 ```shell
 helm install -n stroom-operator-system stroom-operator \
-oci://ghcr.io/gradata-systems/helm-charts/stroom-operator \
---set registry=<private registry URL>
+oci://ghcr.io/gchq/helm-charts/stroom-operator \
+--set registry=<private registry URL>/gchq/stroom-k8s-operator
 ```
 
 ## Explore sample configuration
@@ -105,12 +106,28 @@ An example Stroom cluster configuration is at [./samples](./samples), which has 
 
 # Upgrading the Operator
 ```shell
-helm upgrade -n stroom-operator-system stroom-operator \
-oci://ghcr.io/gradata-systems/helm-charts/stroom-operator
 helm upgrade -n stroom-operator-system stroom-operator-crds \
-oci://ghcr.io/gradata-systems/helm-charts/stroom-operator-crds
+oci://ghcr.io/gchq/helm-charts/stroom-operator-crds
+helm upgrade -n stroom-operator-system stroom-operator \
+oci://ghcr.io/gchq/helm-charts/stroom-operator
 ```
-This upgrades the controller in-place, without affecting any deployed Stroom clusters.
+Always upgrade `stroom-operator-crds` before `stroom-operator`. Upgrading the operator does not normally restart Stroom nodes,
+but some releases change the Stroom `Pod` specification, causing a rolling restart of each Stroom cluster. Check the release notes before upgrading.
+
+# Upgrading to 2.0.0
+Version 2.0.0 contains breaking changes. Before upgrading:
+1. Upgrade to Stroom 7.13 or later. Earlier versions are not supported.
+2. Remove any manually-configured API key from your `StroomCluster` resources (e.g. `extraEnv`, or `extraVolumes` / `extraVolumeMounts` at `/stroom/api-key`).
+   The operator now provisions the key itself, and a volume mounted at `/stroom/api-key` will prevent Stroom nodes from being updated.
+3. If you set `IDENTITY_PROVIDER_TYPE` via `extraEnv`, remove it and set `spec.identityProviderType` instead.
+4. If you use an external identity provider, set `spec.identityProviderType: EXTERNAL_IDP` and ensure `spec.openId` is set.
+5. If you install from a private registry, Helm value `registry` is now the full image repository,
+   e.g. `--set registry=my-registry.example.com/gchq/stroom-k8s-operator` (previously `my-registry.example.com`).
+
+Then upgrade the CRDs first, followed by the operator (see [Upgrading the Operator](#upgrading-the-operator)).
+
+After upgrading, each Stroom cluster using `INTERNAL_IDP` runs the API key `Job`, then performs a rolling restart of its nodes.
+
 
 # Upgrading a Stroom cluster
 To upgrade a Stroom cluster to use a newer, tagged container image:

@@ -2248,6 +2248,14 @@ spec:
                 - tlsKeystorePasswordSecret
                 - tlsSecretName
                 type: object
+              identityProviderType:
+                default: INTERNAL_IDP
+                description: INTERNAL_IDP means the operator creates and manages an
+                  API key; EXTERNAL_IDP requires openId
+                enum:
+                - INTERNAL_IDP
+                - EXTERNAL_IDP
+                type: string
               image:
                 properties:
                   repository:
@@ -4466,7 +4474,7 @@ spec:
                 type: integer
               openId:
                 description: Configures OpenID to enable operator components to query
-                  the Stroom API
+                  the Stroom API - Only needed with EXTERNAL_IDP
                 properties:
                   clientId:
                     description: Name of the OpenID client
@@ -4507,9 +4515,11 @@ spec:
             - ingress
             - nodeSets
             - nodeTerminationPeriodSecs
-            - openId
             - statsDatabaseName
             type: object
+            x-kubernetes-validations:
+            - message: openId is required when identityProviderType is EXTERNAL_IDP
+              rule: self.identityProviderType != 'EXTERNAL_IDP' || has(self.openId)
           status:
             description: StroomClusterStatus defines the observed state of StroomCluster
             properties:
