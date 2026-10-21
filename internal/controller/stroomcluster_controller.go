@@ -26,11 +26,13 @@ import (
 	"github.com/go-logr/logr"
 	common "github.com/gradata-systems/stroom-k8s-operator/internal/controller/common"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -45,8 +47,9 @@ import (
 // StroomClusterReconciler reconciles a StroomCluster object
 type StroomClusterReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
-	Log    logr.Logger
+	Scheme   *runtime.Scheme
+	Log      logr.Logger
+	Recorder events.EventRecorder
 }
 
 //go:embed static_content
@@ -66,6 +69,8 @@ var StaticFiles embed.FS
 //+kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;delete
 //+kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -183,6 +188,18 @@ func (r *StroomClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		logger.Info("Log sender ConfigMap reconciled", "Result", operationResult, "Namespace", existingConfigMap.Namespace, "Name", existingConfigMap.Name)
 	}
 
+	r.warnOnIdentityProviderConflict(&stroomCluster)
+
+	// For INTERNAL_IDP, make sure the operator has a valid API key before any Stroom nodes need it.
+	// apiKeyResult schedules the next key check, and is returned once the rest of the cluster is reconciled.
+	apiKeyReady, apiKeyResult, err := r.ensureApiKey(ctx, &stroomCluster, &dbInfo)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !apiKeyReady {
+		return apiKeyResult, nil
+	}
+
 	// Query the StroomCluster StatefulSet and if it doesn't exist, create it
 	for _, nodeSet := range stroomCluster.Spec.NodeSets {
 		// Create a StatefulSet representing the NodeSet's nodes
@@ -278,7 +295,7 @@ func (r *StroomClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		logger.Info("Ingress reconciled", "Result", operationResult, "Namespace", existingIngress.Namespace, "Name", existingIngress.Name)
 	}
 
-	return ctrl.Result{}, nil
+	return apiKeyResult, nil
 }
 
 func (r *StroomClusterReconciler) deletePvcs(ctx context.Context, stroomCluster *stroomv1.StroomCluster, nodeSet *stroomv1.NodeSet, oldReplicaCount int32, newReplicaCount int32) error {
@@ -570,5 +587,7 @@ func (r *StroomClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&stroomv1.StroomCluster{}).
 		Owns(&appsv1.StatefulSet{}).
+		Owns(&batchv1.Job{}).
+		Owns(&corev1.Secret{}).
 		Complete(r)
 }

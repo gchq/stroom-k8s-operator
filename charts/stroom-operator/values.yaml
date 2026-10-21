@@ -2,7 +2,8 @@
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
-# Specify a private registry to use when pulling images
+# Full image repository to pull the operator from (e.g. my-registry.example.com/gchq/stroom-k8s-operator).
+# Defaults to gchq/stroom-k8s-operator.
 registry: ""
 
 image:

@@ -580,7 +580,11 @@ func (in *StroomClusterSpec) DeepCopyInto(out *StroomClusterSpec) {
 	out.Image = in.Image
 	out.DatabaseServerRef = in.DatabaseServerRef
 	out.ConfigMapRef = in.ConfigMapRef
-	out.OpenId = in.OpenId
+	if in.OpenId != nil {
+		in, out := &in.OpenId, &out.OpenId
+		*out = new(OpenIdConfiguration)
+		**out = **in
+	}
 	out.Https = in.Https
 	out.Ingress = in.Ingress
 	if in.NodeSets != nil {

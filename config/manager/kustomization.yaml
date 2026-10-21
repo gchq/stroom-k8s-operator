@@ -7,4 +7,4 @@ generatorOptions:
 images:
 - name: controller
   newName: gchq/stroom-k8s-operator
-  newTag: 1.1.2
+  newTag: 2.0.0

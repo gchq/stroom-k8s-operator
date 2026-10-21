@@ -32,6 +32,8 @@ const (
 	StroomTlsVolumeName         = "tls"
 	StroomApiTokenVolumeName    = "api-token"
 	StroomApiTokenMountPath     = "/stroom/auth"
+	StroomApiKeyVolumeName      = "api-key"
+	StroomApiKeyMountPath       = "/stroom/api-key"
 	LogSenderConfigMapName      = "log-sender-configmap"
 	LogSenderDefaultCpuLimit    = "500m"
 	LogSenderDefaultMemoryLimit = "256Mi"
@@ -126,7 +128,7 @@ func (r *StroomClusterReconciler) createStaticContentVolume(stroomCluster *stroo
 func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.StroomCluster, nodeSet *stroomv1.NodeSet, dbInfo *DatabaseConnectionInfo) *appsv1.StatefulSet {
 	logSender := stroomCluster.Spec.LogSender
 
-	env := append([]corev1.EnvVar{{
+	env := []corev1.EnvVar{{
 		Name:  "API_GATEWAY_HOST",
 		Value: stroomCluster.Spec.Ingress.HostName,
 	}, {
@@ -181,48 +183,10 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 	}, {
 		Name:  "STROOM_NODE_ROLE",
 		Value: string(nodeSet.Role),
-	}, {
-		Name:  "STROOM_JDBC_DRIVER_URL",
-		Value: dbInfo.ToJdbcConnectionString(stroomCluster.Spec.AppDatabaseName),
-	}, {
-		Name:  "STROOM_JDBC_DRIVER_CLASS_NAME",
-		Value: "com.mysql.cj.jdbc.Driver",
-	}, {
-		Name:  "STROOM_JDBC_DRIVER_USERNAME",
-		Value: dbInfo.UserName,
-	}, {
-		Name: "STROOM_JDBC_DRIVER_PASSWORD",
-		ValueFrom: &corev1.EnvVarSource{
-			SecretKeyRef: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{
-					Name: dbInfo.SecretName,
-				},
-				Key: dbInfo.UserName,
-			},
-		},
-	}, {
-		Name:  "STROOM_STATISTICS_JDBC_DRIVER_URL",
-		Value: dbInfo.ToJdbcConnectionString(stroomCluster.Spec.StatsDatabaseName),
-	}, {
-		Name:  "STROOM_STATISTICS_JDBC_DRIVER_CLASS_NAME",
-		Value: "com.mysql.cj.jdbc.Driver",
-	}, {
-		Name:  "STROOM_STATISTICS_JDBC_DRIVER_USERNAME",
-		Value: dbInfo.UserName,
-	}, {
-		Name: "STROOM_STATISTICS_JDBC_DRIVER_PASSWORD",
-		ValueFrom: &corev1.EnvVarSource{
-			SecretKeyRef: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{
-					Name: dbInfo.SecretName,
-				},
-				Key: dbInfo.UserName,
-			},
-		},
-	}, {
-		Name:  "STROOM_TEMP",
-		Value: "/stroom/tmp",
-	}}, stroomCluster.Spec.ExtraEnv...)
+	}}
+	env = append(env, r.getStroomCommonEnv(stroomCluster, dbInfo)...)
+	env = append(env, r.getIdentityProviderEnv(stroomCluster))
+	env = append(env, stroomCluster.Spec.ExtraEnv...)
 
 	// List the jobs that should be managed by the node startup and shutdown scripts.
 	// These are typically node role dependent. Frontend nodes for instance, shouldn't have the `Data Processor` node
@@ -288,6 +252,23 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 		},
 	}
 
+	// For INTERNAL_IDP, mount the operator-managed API key. Mounted as a directory (not subPath), so a rotated key
+	// becomes visible to running pods without a restart.
+	if stroomCluster.Spec.GetIdentityProviderType() == stroomv1.InternalIdp {
+		volumes = append(volumes, corev1.Volume{
+			Name: StroomApiKeyVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: stroomCluster.GetApiKeySecretName(),
+					Items: []corev1.KeyToPath{{
+						Key:  ApiKeySecretDataKey,
+						Path: ApiKeySecretDataKey,
+					}},
+				},
+			},
+		})
+	}
+
 	if !stroomCluster.Spec.Https.IsZero() {
 		volumes = append(volumes, []corev1.Volume{
 			{
@@ -333,16 +314,7 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 
 	// If a Stroom node config override is provided, create a volume for it
 	if !stroomCluster.Spec.ConfigMapRef.IsZero() {
-		volumes = append(volumes, corev1.Volume{
-			Name: "config-override",
-			VolumeSource: corev1.VolumeSource{
-				ConfigMap: &corev1.ConfigMapVolumeSource{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: stroomCluster.Spec.ConfigMapRef.Name,
-					},
-				},
-			},
-		})
+		volumes = append(volumes, *r.createConfigOverrideVolume(stroomCluster))
 	}
 
 	volumeMounts := []corev1.VolumeMount{{
@@ -404,6 +376,14 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 		SubPath:   "search-results",
 		MountPath: "/stroom/search_results",
 	}}
+
+	if stroomCluster.Spec.GetIdentityProviderType() == stroomv1.InternalIdp {
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      StroomApiKeyVolumeName,
+			MountPath: StroomApiKeyMountPath,
+			ReadOnly:  true,
+		})
+	}
 
 	if !stroomCluster.Spec.Https.IsZero() {
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{
@@ -662,6 +642,75 @@ func (r *StroomClusterReconciler) appendConfigVolumeMounts(stroomCluster *stroom
 			ReadOnly:  true,
 		})
 	}
+}
+
+// createConfigOverrideVolume creates a volume for the user-provided Stroom config ConfigMap, if one is specified
+func (r *StroomClusterReconciler) createConfigOverrideVolume(stroomCluster *stroomv1.StroomCluster) *corev1.Volume {
+	return &corev1.Volume{
+		Name: "config-override",
+		VolumeSource: corev1.VolumeSource{
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{
+					Name: stroomCluster.Spec.ConfigMapRef.Name,
+				},
+			},
+		},
+	}
+}
+
+// getIdentityProviderEnv tells Stroom which identity provider to use, matching the operator's own behaviour
+func (r *StroomClusterReconciler) getIdentityProviderEnv(stroomCluster *stroomv1.StroomCluster) corev1.EnvVar {
+	return corev1.EnvVar{
+		Name:  "IDENTITY_PROVIDER_TYPE",
+		Value: string(stroomCluster.Spec.GetIdentityProviderType()),
+	}
+}
+
+// getStroomCommonEnv returns environment variables needed by any container running Stroom against the
+// cluster's databases, i.e. Stroom nodes and the API key Job
+func (r *StroomClusterReconciler) getStroomCommonEnv(stroomCluster *stroomv1.StroomCluster, dbInfo *DatabaseConnectionInfo) []corev1.EnvVar {
+	return []corev1.EnvVar{{
+		Name:  "STROOM_JDBC_DRIVER_URL",
+		Value: dbInfo.ToJdbcConnectionString(stroomCluster.Spec.AppDatabaseName),
+	}, {
+		Name:  "STROOM_JDBC_DRIVER_CLASS_NAME",
+		Value: "com.mysql.cj.jdbc.Driver",
+	}, {
+		Name:  "STROOM_JDBC_DRIVER_USERNAME",
+		Value: dbInfo.UserName,
+	}, {
+		Name: "STROOM_JDBC_DRIVER_PASSWORD",
+		ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{
+					Name: dbInfo.SecretName,
+				},
+				Key: dbInfo.UserName,
+			},
+		},
+	}, {
+		Name:  "STROOM_STATISTICS_JDBC_DRIVER_URL",
+		Value: dbInfo.ToJdbcConnectionString(stroomCluster.Spec.StatsDatabaseName),
+	}, {
+		Name:  "STROOM_STATISTICS_JDBC_DRIVER_CLASS_NAME",
+		Value: "com.mysql.cj.jdbc.Driver",
+	}, {
+		Name:  "STROOM_STATISTICS_JDBC_DRIVER_USERNAME",
+		Value: dbInfo.UserName,
+	}, {
+		Name: "STROOM_STATISTICS_JDBC_DRIVER_PASSWORD",
+		ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{
+					Name: dbInfo.SecretName,
+				},
+				Key: dbInfo.UserName,
+			},
+		},
+	}, {
+		Name:  "STROOM_TEMP",
+		Value: "/stroom/tmp",
+	}}
 }
 
 // getJvmOptions generates JVM options from the requested NodeSet resources.
