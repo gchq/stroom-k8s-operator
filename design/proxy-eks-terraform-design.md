@@ -1,6 +1,6 @@
 # Stroom-Proxy 7.14 on AWS EKS with Terraform: design
 
-Status: design agreed 2026-10-29 and revised the same day after review comments (PrivateLink, authentication, immutable S3, blue/green upgrades, log sender). See section 15. Phase 1 (`10-infra`) is written but needs reworking for per-colour proxy node groups (section 9). Later phases are not written.
+Status: design agreed 2026-10-29 and revised the same day after review comments (PrivateLink, authentication, immutable S3, blue/green upgrades, log sender). See section 15. Phase 1 (`10-infra`, with per-colour proxy node groups) is written but not yet applied to AWS. Later phases are not written.
 
 ## 1. Goal
 
@@ -122,7 +122,7 @@ stroom-k8s-operator/terraform/aws-eks-proxy/   # in gchq/stroom-k8s-operator, ne
   * **proxy, one set per colour**: `proxy_node_colours` is a map keyed by colour (`blue`, `green`). Each colour gets **one node group per AZ**, so every AZ that holds a proxy volume always has a node, and an upgrade never depends on the autoscaling group balancing AZs. Each colour sets:
     * `instance_types` (validated: no Graviton, F2), `capacity_type` (`ON_DEMAND` by default; `SPOT` allowed with a warning);
     * `nodes_per_az`;
-    * `kubernetes_version` (defaults to the cluster's) and `ami_release_version` (pinned, so nothing changes under a running colour; node upgrades come from a new colour, section 9);
+    * `kubernetes_version` (explicit, the cluster's or up to three minor versions older, so a control-plane upgrade doesn't roll proxy nodes) and `ami_release_version` (the latest when the colour is created unless pinned, then never changed: the module's automatic latest-AMI updates are off for proxy nodes). Node upgrades come from a new colour (section 9);
     * `root_volume_gb`.
 
     Nodes are labelled `workload=stroom-proxy` and `stroom-proxy/colour=<colour>`, and tainted `workload=stroom-proxy:NoSchedule`.
@@ -405,8 +405,8 @@ proxy_node_colours = {
     instance_types      = ["m6i.xlarge"]    # validated: no Graviton (amd64-only image)
     capacity_type       = "ON_DEMAND"
     nodes_per_az        = 1
-    kubernetes_version  = null              # = cluster_version
-    ami_release_version = "1.37.0-20261020" # pinned; change it through a new colour
+    kubernetes_version  = "1.37"            # explicit; may lag cluster_version by up to 3 minors
+    ami_release_version = null              # latest at creation, then fixed; or pin e.g. "1.37.4-20261020"
     root_volume_gb      = 50
   }
   # green = { ... }                         # only during an upgrade
