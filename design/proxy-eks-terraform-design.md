@@ -1,6 +1,6 @@
 # Stroom-Proxy 7.14 on AWS EKS with Terraform: design
 
-Status: design agreed 2026-10-29 and revised the same day after review comments (PrivateLink, authentication, immutable S3, blue/green upgrades, log sender, and the current ALB topology). See section 15. Phases 1 and 2 (`10-infra` and `20-platform`) are written but not yet applied to AWS. Later phases are not written.
+Status: design agreed 2026-10-29 and revised the same day after review comments (PrivateLink, authentication, immutable S3, blue/green upgrades, log sender, and the current ALB topology). See section 15. Phases 1 and 2 (`10-infra`, `20-platform`) and phase 3 (the `stroom-proxy` chart) are written; the Terraform is not yet applied to AWS, while the chart has been validated and boot-tested against the 7.14-beta.8 image. Later phases are not written.
 
 ## 1. Goal
 
@@ -27,18 +27,22 @@ These came from the 7.14 source, Docker Hub, AWS documentation and the public He
 |---|---------|-------------|
 | F1 | There is no 7.14 GA release yet. The newest tag is `v7.14-beta.8` (16 Oct 2026). The floating tag `v7.14-LATEST` has the same digest as `v7.14-beta.8-parallel-pathways`, a branch build, not `v7.14-beta.8`. | Never deploy a floating tag. Terraform pins an explicit tag plus digest (`image_tag`, `image_digest`). A helper script finds the newest `v7.14.N` / `v7.14-beta.N` tag. |
 | F2 | The `gchq/stroom-proxy` image is published for `amd64` only. | Graviton (`*g` families such as `m7g`, `c7g`) cannot be used. A variable validation rejects them. |
-| F3 | The only existing stroom-proxy Helm chart is `gradata-systems/stroom-helm-charts` → `charts/stroom-proxy` (chart 1.2.13, appVersion `v7.10.5`, last pushed 31 Mar 2026; formerly `p-kimberley/stroom-kubernetes`). `gchq/stroom-k8s-operator` (a fork of `gradata-systems/stroom-k8s-operator`) has only the operator and CRD charts, and its custom resources cover Stroom clusters, databases, backups and task autoscaling, not Stroom-Proxy. There is no `gchq/stroom-k8s` repo. | The gradata chart (Apache 2.0) is copied into `gchq/stroom-k8s-operator` as `charts/stroom-proxy` and updated there for 7.14 (section 10). The Terraform lives in the same repo. |
+| F3 | The only existing stroom-proxy Helm chart is `gradata-systems/stroom-helm-charts` → `charts/stroom-proxy` (chart 1.2.13, appVersion `v7.10.5`, last pushed 31 Mar 2026; formerly `p-kimberley/stroom-kubernetes`). `gchq/stroom-k8s-operator` (a fork of `gradata-systems/stroom-k8s-operator`) has only the operator and CRD charts, and its custom resources cover Stroom clusters, databases, backups and task autoscaling, not Stroom-Proxy. There is no `gchq/stroom-k8s` repo. | **That chart has no licence** (nor did `p-kimberley/stroom-kubernetes`), so it can't be copied. A new chart is written from scratch in `gchq/stroom-k8s-operator` as `charts/stroom-proxy`, MIT like the rest of the repo (section 10). The Terraform lives in the same repo. |
 | F4 | That chart does not boot 7.14 as written: it always renders `proxyConfig.feedStatus.enabled` and `.apiKey`, which no longer exist in 7.14 (`feedStatus` only has `url` and `feedStatusCache`; the API key moved to `downstreamHost.apiKey`). Proxy enables `FAIL_ON_UNKNOWN_PROPERTIES` (`App.java:147`), so unknown keys stop start-up. It also has no values for `enabledAuthenticationTypes`, `receiptCheckMode`, `downstreamHost`, data feed identities, OpenID or S3 forwarding. | The chart needs a 7.14 update (section 10). |
 | F5 | The proxy reads `receive.x509CertificateHeader` as a servlet request attribute, not as a PEM string in an HTTP header (`CertificateExtractorImpl.extractCertificate`). Only the DN header (`x509CertificateDnHeader`) works when a load balancer ends TLS. | With the ALB checking client certificates, the proxy sees only the subject DN, from the header the ALB adds. Certificate identity is by DN (section 6). |
 | F6 | `allowedCertificateProviders` accepts IP addresses or host names, not CIDR ranges, and ALB node IPs change. | It can't be used to pin DN-header trust to the ALB. Network controls do that instead (section 5.3). |
 | F7 | S3 forwarding and SQS ingest use the AWS SDK default credential chain (`AwsCredentialsHelper`). | EKS Pod Identity works with no proxy changes. |
-| F8 | The gradata chart's log-sender sidecar runs as root with `privileged: true`. | Don't use it. A non-root log-sender already exists on a branch (section 17.2). |
+| F8 | The gradata chart's log-sender sidecar runs as root with `privileged: true`. | Not used. A non-root log-sender already exists on a branch (section 17.2). |
 | F9 | ingress-nginx, which the chart's Ingress template assumes, was retired by Kubernetes SIG Network in March 2026. | Don't use the chart's Ingress. |
 | F10 | The proxy watches `receive.dataFeedIdentitiesDir` with a Java `WatchService` (`DataFeedIdentitiesDirWatcher`). It loads every `*.json` regular file at start, reloads a file when it is created or modified, and drops that file's keys when it is deleted. | DFKs synced from S3 into that directory take effect without a restart. Files must be written atomically (temporary name not ending `.json`, then rename) so a half-written file is never parsed (section 7.2). |
 | F11 | The S3 forwarder (`ForwardS3DestinationImpl`, `S3ClientHelper`) only calls `PutObject`, with object tags (`Feed`, stream type) and optional multipart upload through the transfer manager. It never deletes or overwrites deliberately, and it doesn't send `If-None-Match`. It uses AWS SDK 2.54, which sends a checksum on every upload by default. | An Object Lock bucket works with it: Object Lock needs a checksum or `Content-MD5` on each put, and the SDK sends one. The proxy's IAM role needs only `s3:PutObject`, `s3:PutObjectTagging` and the multipart actions. A bucket policy can't require `If-None-Match`, so object keys must be unique (section 7.1). |
 | F12 | Dropwizard 5 (`HttpConnectorFactory`) supports `useForwardedHeaders` (and `useProxyProtocol`) on a connector. | The proxy's ALB-facing connector sets `useForwardedHeaders: true`, so the receive log records the sender address from `X-Forwarded-For`. Over PrivateLink that address is the NLB's, not the sender's (section 5.4). |
 | F13 | The proxy doesn't include Dropwizard's SSL reload bundle, so its own TLS settings are only read at start-up. | Little impact now: the client trust store and the public server certificate live on the ALB, which updates them without restarts (section 5.2). |
-| F14 | If a request has no real client certificate, the proxy takes the DN from the `x509CertificateDnHeader` header (default `X-SSL-CLIENT-S-DN`). It trusts that header from **any** source when `allowedCertificateProviders` is empty (`CertificateExtractorImpl.getDN`, `isRemoteHostTrustedCertProvider`). The receive config is global, so the proxy can't trust the header on one path (the mTLS listener) and not on another (the non-mTLS listener). | Anyone who can get the DN header to the proxy can claim any certificate identity. The ALB must stop the header arriving through the non-mTLS listener, and only the ALB may reach the proxy pods (section 5.3). **The current deployment should be tested for this** (section 15). |
+| F14 | If a request has no real client certificate, the proxy takes the DN from the `x509CertificateDnHeader` header (default `X-SSL-CLIENT-S-DN`). It trusts that header from **any** source when `allowedCertificateProviders` is empty (`CertificateExtractorImpl.getDN`, `isRemoteHostTrustedCertProvider`). The receive config is global, so the proxy can't trust the header on one path (the mTLS listener) and not on another (the non-mTLS listener). | Anyone who can get the DN header to the proxy can claim any certificate identity. The ALB must stop the header arriving through the non-mTLS listener, and only the ALB may reach the proxy pods (section 5.3). Confirmed by test against 7.14-beta.8: a POST with no client certificate and a made-up `X-Stroom-Mtls-Subject` was accepted (200), and the receive log recorded `RemoteDN=` empty, so the claimed identity isn't even logged. **The current deployment should be tested for this** (section 15). |
+| F15 | The image's own config serves the admin endpoints on port **8091** (`/proxyAdmin`). In 7.14 the downstream health checks are `stroom.proxy.app.handler.RemoteFeedStatusClient`, `stroom.proxy.app.ReceiveDataRuleSetClient`, `stroom.proxy.app.security.ProxyApiKeyCheckClient` and `stroom.proxy.app.handler.RemoteS3EventClient` (not `RemoteFeedStatusService`), registered whether or not a downstream is configured. `filteredhealthcheck` answers 500 for an unknown name in `deny`, and reads only one comma-separated `deny` value. | The admin port is 8091. Probes and target-group health checks deny those four checks and the IdP check (`stroom.security.common.impl.ExternalIdpConfigurationProvider`) in one list, so pods stay ready while a downstream or the IdP is down. |
+| F16 | Jetty's SNI host check rejects any request whose Host doesn't match the server certificate (`400 Invalid SNI`). Behind the ALB, Host is the public name; the pod's certificate is self-signed. | The chart sets `disableSniHostCheck: true` on both HTTPS connectors. Without it, every request would fail. |
+| F17 | The proxy won't start without an enabled forward destination. A destination with no `enabled` key is enabled for HTTP but **disabled** for file and S3 destinations (their JSON constructors default it to false). | The chart marks every destination `enabled: true` unless it says otherwise, and fails to render without one. |
+| F18 | The S3 forwarder's default key template, `${type}/${year}/${month}/${day}/${idPath}/${feed}/${idPadded}.zip`, uses `${idPath}` and `${idPadded}`, which the forwarder doesn't supply; it supplies time variables, `${uuid}`, `${feed}`, `${type}` and `${receiptId}`. | The default doesn't give unique keys. The key template is always set, and must contain `${uuid}` or `${receiptId}` (section 7.1). |
 
 ## 3. Architecture
 
@@ -71,7 +75,7 @@ These came from the 7.14 source, Docker Hub, AWS documentation and the public He
   │  │proxy-b-0  ││proxy-b-1  ││proxy-b-2  │   │proxy-g-0││proxy-g-1││proxy-g-2│  │
   │  │:8443 HTTPS││  ...      ││  ...      │   │  ...    ││  ...    ││  ...    │  │
   │  │:8444 local││           ││           │   └─────────┘└─────────┘└─────────┘  │
-  │  │:8090 admin││           ││           │                                      │
+  │  │:8091 admin││           ││           │                                      │
   │  │+ s3-sync  ││           ││           │   system nodes: CoreDNS, LB          │
   │  │+ log-sndr*││           ││           │   controller, ESO, EBS CSI           │
   │  │EBS gp3 PVC││EBS gp3 PVC││EBS gp3 PVC│   controller, CloudWatch             │
@@ -185,7 +189,7 @@ All three are **internal** and sit in the **lb subnets**. (`load_balancer_scheme
 | `:9444` test plain | as `:443` | forward to the inactive colour's target group | As above, with the same 403 rule. |
 
 * Security group: 443 and 8443 from the two NLBs' security groups; 9443 and 9444 from `admin_cidrs`.
-* Target groups: one per colour, `target_type = ip`, HTTPS to pod port 8443, health check HTTP on 8090 at `/proxyAdmin/filteredhealthcheck?deny=stroom.proxy.app.handler.RemoteFeedStatusService`, `deregistration_delay` from a variable (default 120 s).
+* Target groups: one per colour, `target_type = ip`, HTTPS to pod port 8443, health check HTTP on 8091 at the chart's `healthCheckPath` (`/proxyAdmin/filteredhealthcheck?minimal=true&deny=…`, F15), `deregistration_delay` from a variable (default 120 s).
 * Idle timeout `alb_idle_timeout` (default 300 s), long enough for slow uploads.
 * Optional: `waf_web_acl_arn` associates an AWS WAF web ACL with the ALB.
 * Access logs to an S3 bucket, optional.
@@ -216,7 +220,7 @@ The proxy trusts the DN header on every request it receives (F14). The design bl
 
 1. **Non-mTLS listener**: a priority-1 rule returns 403 for any request carrying `X-Stroom-Mtls-Subject` or any `X-Amzn-Mtls-*` header, whatever its value. Test listener `:9444` has the same rule.
 2. **mTLS listener**: the ALB adds the header after verifying the certificate. Phase 4 tests confirm that a client-supplied `X-Stroom-Mtls-Subject` is replaced, not passed alongside. If it isn't, the same 403 rule is added there too: AWS evaluates rules on the client's request before adding mTLS headers. That ordering is also confirmed in testing.
-3. **Direct to the pods**: a NetworkPolicy allows 8443 and 8090 **only from the lb subnets** (section 14). Pods, nodes and anything else in the VPC can't reach the proxy port, so they can't send the header around the ALB.
+3. **Direct to the pods**: a NetworkPolicy allows 8443 and 8091 **only from the lb subnets** (section 14). Pods, nodes and anything else in the VPC can't reach the proxy port, so they can't send the header around the ALB.
 4. **In-pod callers** (the log-sender) use port 8444 on localhost. It is not exposed outside the pod.
 
 A proxy change that let the DN header be trusted only on one connector would make this simpler (section 17.3).
@@ -276,7 +280,7 @@ Forwarding goes to S3 only (`forward_s3`), and nothing else is forwarded by defa
 * **The proxy role can only add objects**: `s3:PutObject`, `s3:PutObjectTagging` (the forwarder tags each object with its feed and stream type, F11), and, when multipart upload is enabled, `s3:AbortMultipartUpload` and `s3:ListMultipartUploadParts`. It has no read, delete, retention, legal-hold or bucket-configuration rights.
 * **The bucket policy** denies any request without TLS, denies the proxy role every `s3:Delete*`, `s3:PutObjectRetention`, `s3:PutObjectLegalHold`, `s3:BypassGovernanceRetention` and `s3:PutBucket*` action (as a backstop to its IAM policy), and denies `s3:PutBucketObjectLockConfiguration` to everyone except `admin_principal_arns`.
 * **Encryption**: SSE-KMS with a dedicated customer-managed key and S3 Bucket Keys. The proxy role gets `kms:GenerateDataKey`, plus `kms:Decrypt`, because S3 needs it to complete multipart uploads. The proxy still can't read objects, because it has no `s3:GetObject`. The key policy keeps key deletion to `admin_principal_arns`. Deleting the key would make the locked data unreadable.
-* **Unique keys**: S3 can't be made to reject a put to an existing key unless the client sends `If-None-Match`, which the proxy doesn't (F11). A second put to the same key would create a new version on top; the earlier version would stay locked and retrievable, but the "current" object would change. So the forwarder's key template must include a per-batch unique value such as the receipt ID, and a validation enforces that. Phase 3 checks the proxy's default key template.
+* **Unique keys**: S3 can't be made to reject a put to an existing key unless the client sends `If-None-Match`, which the proxy doesn't (F11). A second put to the same key would create a new version on top; the earlier version would stay locked and retrievable, but the "current" object would change. So the forwarder's key template must include a per-batch unique value, and the proxy's default doesn't (F18). Terraform always sets it, by default to `${type}/${year}/${month}/${day}/${feed}/${uuid}.zip`, and a validation requires `${uuid}` or `${receiptId}`.
 * **Telling Stroom about new data**: with `data_notifications = "sqs"` (the default), S3 event notifications go to an SQS queue that Stroom's S3/SQS ingest can read. The alternative, the forwarder's `REST` notification type, needs a downstream Stroom.
 * **Existing bucket**: `data_bucket_name` can name an existing bucket instead. The AWS provider has no data source for Object Lock settings, so an `external` data source calls `s3api get-object-lock-configuration`. A precondition then fails the plan unless the bucket has versioning and Object Lock in `COMPLIANCE` mode with a default retention.
 * **Destroy**: Terraform never deletes the data bucket (`prevent_destroy`, no `force_destroy`). AWS wouldn't allow it while locked objects remain anyway. Removing `30-stroom-proxy` means first taking the bucket out of state.
@@ -376,28 +380,25 @@ Rarely needed now that certificates and the trust store live on the ALB, but ava
 
 ## 10. Helm chart
 
-The gradata `stroom-proxy` chart (F3) is copied into `gchq/stroom-k8s-operator` at `charts/stroom-proxy`, keeping its Apache 2.0 licence and crediting its origin in the chart README. The changes needed are then made there:
+`charts/stroom-proxy` in `gchq/stroom-k8s-operator` is written from scratch, MIT like the rest of the repo: the gradata chart has no licence (F3). Its README documents the values. In outline:
 
-1. Remove `feedStatus.enabled` and `feedStatus.apiKey`. Add a `downstreamHost` block with `enabled` and `apiKey: ${DOWNSTREAM_API_KEY}` (F4).
-2. Add values for `receive.enabledAuthenticationTypes`, `receiptCheckMode`, `fallbackReceiveAction`, `dataFeedIdentitiesDir`, `dataFeedOwnerMetaKey`, `x509CertificateDnHeader`, `x509CertificateDnFormat`, `allowedCertificateProviders` and `maxRequestSize`.
-3. Add a `security.authentication.openId` block.
-4. Make `forwardHttpDestinations` a list. Add `forwardS3Destinations` and `forwardFileDestinations`. Update queue keys to 7.14 (`forwardRetryThreadCount`, `livenessCheckInterval`, …).
-5. Add `fsync` and `threads` passthrough. Better still, add a generic `extraProxyConfig` map deep-merged into `proxyConfig`, so new proxy settings don't need a chart release.
-6. Two application connectors: 8443 HTTPS with `useForwardedHeaders: true` and no client authentication (the ALB has already checked certificates), exposed through the Service; and 8444 HTTPS on localhost only, without forwarded headers, for in-pod callers (section 5.3). Dropwizard `shutdownGracePeriod` from values.
-7. Replace the chart's keystore/trust-store init container with one that generates a self-signed server certificate for 8443 and 8444 at start-up (section 5.1). No trust store is needed in the pod.
-8. Add the `s3-sync` init container and sidecar for DFKs (section 7.2), with their image, interval, bucket and prefix as values.
-9. Add `podDisruptionBudget`, `topologySpreadConstraints`, pod anti-affinity, `persistentVolumeClaimRetentionPolicy`, and the `restricted` PSS-compatible `securityContext` (`allowPrivilegeEscalation: false`, drop ALL, `seccompProfile: RuntimeDefault`). Check the image's entrypoint: it only `chown`s and `su-exec`s when started as root, so starting as uid 1000 with `fsGroup: 1000` should skip that path.
-10. Add a `preStop` sleep and `terminationGracePeriodSeconds` derived from a `drain.deregistrationDelaySeconds` value (section 9.3).
-11. Add a `colour` value. It suffixes resource names, labels pods `stroom-proxy/colour`, and sets the nodeSelector, so two releases (blue and green) can run side by side in one namespace.
-12. The Service becomes `ClusterIP` (the `TargetGroupBinding` refers to it). There is no Ingress and no `LoadBalancer` Service.
-13. Make the `checksum/config` pod annotation roll pods when config changes. Add a `podAnnotations` value.
-14. Replace the privileged log-sender with the non-root log-sender (section 17.2), posting to `https://localhost:8444/datafeed`, disabled by default.
-15. Add `image.digest`, rendered as `repository@sha256:…` when set.
-16. Add `logging.consoleAppenders` (default `true`), which adds console appenders to the `receive` and `send` loggers and the request log, each line prefixed with the log name. CloudWatch then gets the receipt audit trail (section 12). The file appenders stay, for the log-sender.
+1. **One release per colour.** `colour` suffixes resource names, labels pods `stroom-proxy/colour`, and pins them to the colour's nodes (nodeSelector plus a toleration for the proxy taint), so blue and green releases run side by side in one namespace.
+2. **StatefulSet**, one pod per node (required anti-affinity), spread across zones (`maxSkew: 1`), `podManagementPolicy: Parallel`, `persistentVolumeClaimRetentionPolicy` Retain/Retain, a PodDisruptionBudget (`maxUnavailable: 1`). The data volume is mounted once at `/stroom-proxy/volume`, holding `data/`, `temp/` and `logs/`.
+3. **Non-root, `restricted` PSS**: uid/gid 1000 (the image's `proxy` user, which owns `/stroom-proxy`, so the entrypoint's root-only `chown` path is skipped), `fsGroup: 1000` with `OnRootMismatch`, no privilege escalation, all capabilities dropped, `RuntimeDefault` seccomp.
+4. **`proxyConfig` passthrough**: the `proxyConfig` value is the proxy's own config section, in its own keys, deep-merged with chart defaults (CERTIFICATE + TOKEN + DATA_FEED_KEY, `RECEIVE_ALL`, downstream off, the ALB's DN header). New proxy settings need no chart release. The chart forces the paths, the data feed identities directory and the directory scanner off, enables destinations that don't say otherwise and fails without one (F17). Secrets are referenced as `${NAME}` and supplied through `extraEnv` / `extraEnvFrom`.
+5. **Connectors**: 8443 HTTPS with `useForwardedHeaders: true` (from the ALB); 8444 HTTPS bound to `127.0.0.1` (in-pod callers); admin 8091 plain HTTP (F15). No client authentication in Jetty (the ALB checks certificates); SNI host check off (F16); `shutdownGracePeriod` from values.
+6. **`tls` init container** (the proxy image's `keytool`): a self-signed certificate in a memory-backed `emptyDir`, kept across container restarts.
+7. **DFK sync**: a `dfk-sync-init` init container and a `dfk-sync` native sidecar (`amazon/aws-cli`, pinned by digest, uid 1000, read-only root filesystem) running `files/s3-sync.sh` (section 7.2).
+8. **Probes and draining**: startup, readiness and liveness probes on `healthCheckPath` (F15); a `preStop` sleep of the deregistration delay plus 15 s, and `terminationGracePeriodSeconds` covering it and Jetty's shutdown (section 9.3).
+9. **Services**: a ClusterIP Service (ports `https`, `admin`) for the `TargetGroupBinding`, and a headless Service for the StatefulSet. No Ingress, no `LoadBalancer` Service.
+10. **Logging**: console appenders for the application log, and (with `logging.consoleAppenders`, default on) for the receive, send and request logs, prefixed `receive`, `send`, `access`, so CloudWatch gets the receipt audit trail. Minute-rolled files on the volume as well.
+11. **Images by digest**: `image.digest` renders `repository@sha256:…`; the image tag defaults to the chart's `appVersion`.
+12. **Log-sender** container, off by default, posting to `https://localhost:8444/datafeed` (section 17.2).
+13. A `checksum/config` pod annotation rolls the pods when the config changes.
 
-The chart is released from `gchq/stroom-k8s-operator` alongside the operator charts. `30-stroom-proxy` references it by `chart_repository` and `chart_version`, with a local `chart_path` override (`../../charts/stroom-proxy`) for chart development only. Worthwhile fixes can also be offered back to the gradata chart.
+The chart is released from `gchq/stroom-k8s-operator` alongside the operator charts (`oci://ghcr.io/gchq/helm-charts`). `30-stroom-proxy` references it by `chart_repository` and `chart_version`, with a local `chart_path` override (`../../charts/stroom-proxy`) for chart development.
 
-A CI check renders the chart with `helm template`, runs the output through the proxy's own config validation (start the image with `--check`, or the `GenerateProxyExpectedYaml` comparison), and fails on unknown keys. This catches F4-style drift whenever the proxy image tag changes.
+**CI check** (`hack/validate-stroom-proxy-chart.sh`, a job in `build-helm-chart.yml`): renders the chart with each values file in `ci/`, runs the generated `config.yml` through the proxy image's own `check` command (which rejects unknown keys, F4), and boots the proxy as the pod would (non-root, generated keystore, the chart's volume layout) with the default values: the health check must answer 200 and an unauthenticated POST to `/datafeed` must get 401. This catches config drift whenever the proxy image changes. The boot test found F15, F16 and F17, which `check` alone doesn't.
 
 ## 11. Secrets
 
@@ -405,13 +406,13 @@ A CI check renders the chart with `helm template`, runs the output through the p
 * Secrets Manager holds the rest: the OpenID client secret (if the IdP needs one) and the downstream API key (only with a downstream Stroom).
 * Default delivery: External Secrets Operator with a Pod Identity role scoped to `arn:…:secret:stroom-proxy/<env>/*`. Terraform only creates `ExternalSecret` objects, so **no secret values end up in Terraform state**.
 * Fallback for small or dev setups: `secret_delivery = "terraform"` reads the values with `aws_secretsmanager_secret_version` and writes `kubernetes_secret`. This puts the values in state, so the backend bucket must be encrypted and access-restricted. The README warns about it.
-* The pod's self-signed certificate and its keystore password are generated at start-up in an `emptyDir` and never stored.
+* The pod's self-signed certificate is generated at start-up in a memory-backed `emptyDir` and never stored. Its keystore password is a fixed chart value, not a secret: it protects a throwaway file, and the ALB doesn't verify target certificates.
 
 ## 12. Observability and operations
 
 * **Logs**: the `amazon-cloudwatch-observability` add-on (Fluent Bit) collects container stdout. With the chart's `logging.consoleAppenders` (section 10, item 16), the application, receive, send and access logs all reach CloudWatch Logs, one log group per cluster with a retention variable (`log_retention_days`, default 90). The rolled log files under `/stroom-proxy/logs` on the PVC are posted back into the proxy by the log-sender once it is enabled (section 17.2). Optional ALB access logs record every request, including those the ALB rejected.
-* **Metrics**: Dropwizard metrics on the admin port 8090. Container Insights gives node and pod metrics. ALB and NLB metrics (including mTLS handshake failures and target health per colour) are in CloudWatch.
-* **Health**: the chart's probes use `/proxyAdmin/filteredhealthcheck?deny=stroom.proxy.app.handler.RemoteFeedStatusService`. Keep that, so pods don't go unready (and get restarted by the liveness probe) when a downstream is down; the proxy queues meanwhile. The ALB target groups use the same endpoint (section 5.1).
+* **Metrics**: Dropwizard metrics on the admin port 8091. Container Insights gives node and pod metrics. ALB and NLB metrics (including mTLS handshake failures and target health per colour) are in CloudWatch.
+* **Health**: the chart's probes use `/proxyAdmin/filteredhealthcheck`, denying the downstream and IdP checks (F15), so pods don't go unready (and get restarted by the liveness probe) when a downstream Stroom or the IdP is down; the proxy queues meanwhile. The ALB target groups use the same endpoint (section 5.1).
 * **Upgrades**: section 9.
 * **Backups**: not needed for the data bucket (Object Lock). Optional EBS snapshot policy (DLM) on PVC volumes by tag.
 
@@ -519,10 +520,10 @@ Outputs: cluster name and endpoint, a `kubeconfig` command, the two datafeed URL
 
 ## 14. Security baseline
 
-* Nodes sit in private subnets; load balancers in the lb subnets. The NLB security groups allow only `allowed_ingress_cidrs` on 443. PrivateLink access is limited by the endpoint services' allowed principals and acceptance. The ALB security group allows the listener ports only from the NLBs, and the test ports only from `admin_cidrs`. `TargetGroupBinding` adds node security group rules for 8443 and 8090 from the ALB security group. The node security group also allows node-to-node traffic, so it isn't what limits access to the pods: the NetworkPolicy is. The EKS API endpoint is private, plus a public endpoint only for `api_allowed_cidrs`.
+* Nodes sit in private subnets; load balancers in the lb subnets. The NLB security groups allow only `allowed_ingress_cidrs` on 443. PrivateLink access is limited by the endpoint services' allowed principals and acceptance. The ALB security group allows the listener ports only from the NLBs, and the test ports only from `admin_cidrs`. `TargetGroupBinding` adds node security group rules for 8443 and 8091 from the ALB security group. The node security group also allows node-to-node traffic, so it isn't what limits access to the pods: the NetworkPolicy is. The EKS API endpoint is private, plus a public endpoint only for `api_allowed_cidrs`.
 * Client certificates are checked by the ALB in verify mode, against the trust store and any revocation lists. Forged DN headers are blocked as in section 5.3.
 * The namespace enforces the `restricted` Pod Security Standard.
-* A NetworkPolicy (enforced by the VPC CNI, section 4.1) allows ingress to proxy pods on 8443 and 8090 only from the lb subnets, and nothing on 8444. Because the proxy trusts the DN header (F14), a pod must never accept 8443 from anything other than the ALB (section 5.3). Egress is unrestricted in v1, since the proxy needs DNS, S3, the IdP's JWKS endpoint and AWS APIs.
+* A NetworkPolicy (enforced by the VPC CNI, section 4.1) allows ingress to proxy pods on 8443 and 8091 only from the lb subnets, and nothing on 8444. Because the proxy trusts the DN header (F14), a pod must never accept 8443 from anything other than the ALB (section 5.3). Egress is unrestricted in v1, since the proxy needs DNS, S3, the IdP's JWKS endpoint and AWS APIs.
 * IMDSv2 is required with hop limit 1, so pods can't use the node role. All AWS access goes through Pod Identity. The proxy role can write to the data bucket and read the DFK prefix, and nothing else (section 7).
 * Data in S3 is immutable for its retention period (section 7.1). EBS volumes, EKS Secrets and both buckets are encrypted with KMS. The state bucket is encrypted and versioned.
 * Optional AWS WAF on the ALB.
@@ -534,7 +535,7 @@ Agreed 2026-10-29; the rows from **PrivateLink** down were added or revised the 
 
 | Topic | Decision |
 |---|---|
-| Helm chart | Copy the gradata `stroom-proxy` chart into `gchq/stroom-k8s-operator` (`charts/stroom-proxy`) and update it there (section 10). Terraform references it by chart repo and version. |
+| Helm chart | A new `charts/stroom-proxy` in `gchq/stroom-k8s-operator`, written from scratch (the gradata chart has no licence, F3), MIT (section 10). Terraform references it by chart repo and version. |
 | Code location | `gchq/stroom-k8s-operator`: Terraform in `terraform/aws-eks-proxy/`, this design in `design/`. |
 | Image | Pin `v7.14-beta.8` plus digest. Move to `v7.14.0` when it ships. Never use `v7.14-LATEST`. |
 | VPC | A new 3-AZ VPC by default, with public, lb and private subnets. `existing_vpc_id` + subnet ids switch to an existing one. |
@@ -557,13 +558,13 @@ Open items:
 * **Test the current deployment for F14**: send a request to its non-mTLS listener with a made-up DN in the subject header it uses (e.g. `X-Amzn-Mtls-Clientcert-Subject: CN=someone-else`). If the proxy accepts it as certificate authentication, the current deployment allows identity spoofing and needs the section 5.3 rule now.
 * The branch and image name of the non-root log-sender, and when it will be released.
 * `data_retention_days` per environment.
-* To confirm in testing: the ALB replaces a client-supplied subject header on the mTLS listener (5.3), the NLB preserves client IPs to its ALB target (5.4), and the proxy's default S3 key template is unique per batch (7.1).
+* To confirm in testing: the ALB replaces a client-supplied subject header on the mTLS listener (5.3), and the NLB preserves client IPs to its ALB target (5.4).
 
 ## 16. Implementation phases
 
 1. `10-infra`: VPC with public, lb and private subnets, EKS, system node group, add-ons, per-colour proxy node groups (one per AZ per colour). Done when `kubectl get nodes` shows a proxy node in each AZ for the colour, and the system pods are running.
 2. `20-platform`: LB controller, gp3 StorageClass, CloudWatch add-on, External Secrets.
-3. Copy the gradata `stroom-proxy` chart into `charts/stroom-proxy`, then make the changes in section 10, with the `helm template` + config validation CI check. Check the proxy's default S3 key template.
+3. Write `charts/stroom-proxy` (section 10), with a CI check that renders it, validates the generated config with the proxy image and boots the proxy.
 4. `30-stroom-proxy` with one colour: the data bucket with Object Lock and SQS notifications, the receipt config bucket, the ALB with both listeners and the trust store, the two NLBs, both endpoint services, S3 forwarding, NetworkPolicy. Done when:
    * a request with a valid client certificate to `https://<mtls_hostname>/datafeed` returns 200, and one without a certificate fails the TLS handshake;
    * requests to `https://<hostname>/datafeed` with an OIDC token and with a DFK return 200, and one with neither is refused;
@@ -605,6 +606,10 @@ Logs then go through the proxy's own queue and forwarding into the data bucket. 
 These would need GitHub issues raised by a person:
 
 * **DN header trust per connector**: let `x509CertificateDnHeader` be honoured only on a named connector (or only from configured CIDR ranges), so the proxy itself can refuse DN headers that didn't come through the mTLS listener (F6, F14).
+* **Record the DN used for authentication**: a request authenticated by DN header is logged with `RemoteDN=` empty (F14), so the audit trail doesn't show which identity was claimed.
+* **Consistent `enabled` defaults for forward destinations**: file and S3 destinations without `enabled` are disabled, HTTP ones enabled (F17).
+* **A unique default S3 key template**: the default uses `${idPath}` and `${idPadded}`, which the S3 forwarder doesn't supply (F18).
+* **Tolerant health check filters**: `filteredhealthcheck` answers 500 for an unknown check name in `deny` (F15), so a renamed check makes every pod unready.
 * **Full certificate from a load balancer header**: parse the URL-encoded PEM in `X-Amzn-Mtls-Clientcert-Leaf` (F5), so the proxy can use the whole certificate, not just the DN.
 * **arm64 image**: publish `gchq/stroom-proxy` for arm64, to allow cheaper Graviton nodes (F2).
 * **Drain mode**: an admin task or endpoint that closes open aggregates immediately and reports when all queues are empty. This would shorten step 4 of blue/green and replace the file counting in `proxy-queue-status.sh`.
