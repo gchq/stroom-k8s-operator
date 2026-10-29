@@ -51,6 +51,8 @@ These came from the 7.14 source, Docker Hub, AWS documentation and the public He
 | F24 | A drained rolling update of 3 replicas took 12 m 53 s (about 4–5 minutes a pod: the deregistration delay, then start-up), against the Helm release timeout of 15 minutes. Data with no `Type` header gets keys without the type level (`2026/10/29/<feed>/<uuid>.zip`). | The Helm timeout must grow with the replica count (section 17.1). The key layout without a type is acceptable, but consumers shouldn't assume a type prefix. |
 | F25 | Dev test, 7.14-beta.8: a `BCRYPT_2A` data feed key never authenticates (401, status 313). `BCryptDataFeedKeyHasher.hash()` cuts the key to 72 bytes before hashing, but `verify()` passes the whole key (`sdk_` + 128 characters) to Spring Security's `BCrypt.checkpw`, which rejects passwords over 72 bytes. The same key hashed with `ARGON2` (Argon2id v1.3, 2 iterations, 64 MiB, parallelism 1, 48-byte hex hash, salt as given) authenticates. | DFK files must use `ARGON2` until the proxy is fixed (section 17.3). The DFK file format: `{"dataFeedIdentities":[{"type":"DATA_FEED_KEY","hash":…,"salt":…,"hashAlgorithm":"ARGON2","streamMetaData":{"AccountId":…},"expiryDateEpochMs":…}]}`; senders send `Authorization: Bearer <key>` and a matching `AccountId` header (`receive.dataFeedOwnerMetaKey`). |
 | F26 | The proxy caches a failed DFK lookup (an empty result) for `authenticatedDataFeedKeyCache.expireAfterWrite`, 5 minutes by default. A DFK file reload only clears cache entries that contain keys from that file, so it doesn't clear the empty ones: a sender who tries a key before it reaches the pod is refused for up to 5 minutes after it arrives. Removing a file takes effect at once (tested: refused on every pod as soon as the deletion synced, about 55 s after the S3 delete). | Tell senders a new key can take up to `dfk_sync_interval` plus 5 minutes to work. A shorter `receive.authenticatedDataFeedKeyCache.expireAfterWrite` narrows the window at the cost of more hashing. Raised as a proxy issue (section 17.3). |
+| F27 | Dev blue/green test: a new Pod Identity association takes a few seconds to reach the EKS Pod Identity webhook. Green's pods, created about a second after their association, got no AWS credentials (no `AWS_CONTAINER_CREDENTIALS_*` variables) and their `dfk-sync` init container failed with `Unable to locate credentials` until the pods were recreated. | The module waits 30 s (`time_sleep`) between each colour's association and its Helm release. |
+| F28 | Removing a colour's Helm release returns at once (1 s), while its pods are still in their `preStop` drain (135 s). The PVCs stay, as intended. | Step 5 of blue/green must wait for the old colour's pods to be gone before deleting its PVCs and node groups (section 9.2). The test listeners are on the internal ALB, so the step 2 tests run from inside the VPC: `admin_cidrs` must include the test host's network (in dev, a pod in the cluster: `10.40.0.0/17`). |
 
 ## 3. Architecture
 
@@ -359,7 +361,7 @@ Starting state: `blue` is the only colour and `active_colour = "blue"`.
 2. **Test green.** From `admin_cidrs`, send test data to the ALB's test listeners with each authentication type: certificate on `:9443`, token and DFK on `:9444`. Check it arrives in the data bucket.
 3. **Switch.** Set `active_colour = "green"` and apply. Both ALB listeners (`:443` and `:8443`) now forward to green, and the test listeners point at blue. The ALB routes per request, so requests already in progress on blue finish there; new requests, including new requests on existing keep-alive connections, go to green. Optionally, `canary_weight` first sends a percentage of requests to green (weighted target groups) before the full switch.
 4. **Drain blue.** Blue receives nothing new. It keeps closing its aggregates (within `aggregation.frequency`) and forwarding its queues to S3. `scripts/proxy-queue-status.sh blue` reports the unsent files per pod. Wait until every pod reports zero.
-5. **Remove blue.** Remove `blue` from `proxy_deployments` and apply (the StatefulSet goes; its PVCs are retained). Delete blue's PVCs with `scripts/proxy-queue-status.sh blue --delete-empty-pvcs`, which deletes a PVC only if it is empty. Remove `blue` from `proxy_node_colours` and apply. Its nodes have no proxy pods left, so nothing is evicted.
+5. **Remove blue.** Remove `blue` from `proxy_deployments` and apply (the StatefulSet goes; its PVCs are retained). The apply returns before blue's pods have finished their `preStop` drain, so wait for them to be gone (F28). Delete blue's PVCs with `scripts/proxy-queue-status.sh blue --delete-empty-pvcs`, which deletes a PVC only if it is empty. Remove `blue` from `proxy_node_colours` and apply. Its nodes have no proxy pods left, so nothing is evicted.
 
 **Rollback**: at any point before step 5, set `active_colour` back to `blue` and apply.
 
@@ -594,7 +596,18 @@ First deployment of all three stacks with `envs/dev`: eu-west-2, 3 AZs, `stroom-
 | Drained rolling update | 3 pods in 12 m 53 s for a config change (F24). |
 | Logs | Proxy logs, including `receive` lines, reach `/aws/containerinsights/stroom-proxy-dev/application`. |
 
-Not yet tested: blue/green (section 9.2), sender addresses at the ALB (5.4), PrivateLink, tokens (no IdP in dev), the log-sender.
+**Blue/green (section 9.2)**, same image on both colours, to test the mechanism:
+
+| Step | Result |
+|---|---|
+| 1. Add green nodes | 3 node groups, one node per AZ, Ready in about 5 minutes; blue unchanged. |
+| 1. Deploy green | Target group, test listeners and release created; pods failed to get credentials until recreated (F27, fixed). Green Ready in 6 minutes. |
+| 2. Test green | From a pod in the cluster through `:9443`/`:9444`: certificate 200, no certificate refused, no credentials 401, forged DN header 403, DFK 200. All requests reached green's pods; none reached blue. |
+| 3. Switch | Listeners changed in 6 s. 720 requests (mTLS and DFK, 2 pairs a second for 4 minutes) sent through the switch: **720 returned 200**. |
+| 4. Drain blue | 318 files in blue's open aggregates; all forwarded to S3 at the 10-minute aggregation boundary (3 objects), queues empty 10 minutes after the switch. |
+| 5. Remove blue | Release, target group and test listeners removed; pods drained and terminated (F28); PVCs deleted after checking they were empty; node groups removed with only DaemonSet pods on them. |
+
+Not yet tested: sender addresses at the ALB (5.4), PrivateLink, tokens (no IdP in dev), the log-sender, canary weights and `proxy-queue-status.sh` (phase 5; `find` on the queue directories stood in for it).
 
 ## 16. Implementation phases
 
