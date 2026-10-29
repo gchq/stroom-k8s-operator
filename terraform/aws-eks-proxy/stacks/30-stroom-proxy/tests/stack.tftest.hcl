@@ -124,3 +124,20 @@ run "client_ca_bundle_from_file" {
     error_message = "The CA bundle should be read from client_ca_bundle_pem_file."
   }
 }
+
+run "imported_certificate_from_files" {
+  command = plan
+
+  variables {
+    tls_certificate_source = "acm_imported"
+    imported_certificate_files = {
+      certificate = "tests/fixtures/client-ca.pem"
+      private_key = "tests/fixtures/placeholder-key.txt"
+    }
+  }
+
+  assert {
+    condition     = module.stroom_proxy.imported_certificate_sha256 == filesha256("tests/fixtures/client-ca.pem")
+    error_message = "The server certificate should be read from imported_certificate_files."
+  }
+}

@@ -57,6 +57,11 @@ output "client_ca_bundle_sha256" {
   value       = var.auth.client_ca_bundle_pem == null ? null : sha256(var.auth.client_ca_bundle_pem)
 }
 
+output "imported_certificate_sha256" {
+  description = "SHA-256 of the server certificate imported for acm_imported (null otherwise), to confirm which certificate is deployed."
+  value       = var.tls_certificate_source == "acm_imported" ? try(nonsensitive(sha256(var.imported_certificate.certificate_pem)), null) : null
+}
+
 output "proxy_role_arn" {
   description = "IAM role of the proxy pods (Pod Identity)."
   value       = aws_iam_role.proxy.arn

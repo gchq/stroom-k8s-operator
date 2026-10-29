@@ -48,10 +48,25 @@ resource "aws_acm_certificate_validation" "public" {
   validation_record_fqdns = [for r in aws_route53_record.certificate_validation : r.fqdn]
 }
 
+resource "aws_acm_certificate" "imported" {
+  # Only with a certificate; otherwise input_checks reports what is missing.
+  count = var.tls_certificate_source == "acm_imported" && nonsensitive(var.imported_certificate != null) ? 1 : 0
+
+  certificate_body  = var.imported_certificate.certificate_pem
+  private_key       = var.imported_certificate.private_key_pem
+  certificate_chain = var.imported_certificate.certificate_chain_pem
+  tags              = var.tags
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
 locals {
   certificate_arn = (
     var.tls_certificate_source == "acm_private_ca" ? aws_acm_certificate.private[0].arn :
     var.tls_certificate_source == "acm_public" ? aws_acm_certificate_validation.public[0].certificate_arn :
+    var.tls_certificate_source == "acm_imported" ? one(aws_acm_certificate.imported[*].arn) :
     var.certificate_arn
   )
 }

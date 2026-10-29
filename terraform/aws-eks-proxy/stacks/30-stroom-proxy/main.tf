@@ -12,10 +12,17 @@ locals {
   infra    = data.terraform_remote_state.infra.outputs
   platform = data.terraform_remote_state.platform.outputs
 
-  # The client CA bundle can come from a file (tfvars can't call file()).
+  # The client CA bundle and an imported server certificate can come from
+  # files (tfvars can't call file()).
   auth = var.client_ca_bundle_pem_file == null ? var.auth : merge(var.auth, {
     client_ca_bundle_pem = file(var.client_ca_bundle_pem_file)
   })
+
+  imported_certificate = var.imported_certificate_files == null ? var.imported_certificate : {
+    certificate_pem       = file(var.imported_certificate_files.certificate)
+    private_key_pem       = sensitive(file(var.imported_certificate_files.private_key))
+    certificate_chain_pem = var.imported_certificate_files.certificate_chain == null ? null : file(var.imported_certificate_files.certificate_chain)
+  }
 
   tags = merge(
     {
@@ -74,6 +81,7 @@ module "stroom_proxy" {
   tls_certificate_source = var.tls_certificate_source
   private_ca_arn         = var.private_ca_arn
   certificate_arn        = var.certificate_arn
+  imported_certificate   = local.imported_certificate
   alb_ssl_policy         = var.alb_ssl_policy
   alb_idle_timeout       = var.alb_idle_timeout
   deregistration_delay   = var.deregistration_delay

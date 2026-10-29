@@ -189,9 +189,10 @@ resource "terraform_data" "input_checks" {
       condition = (
         var.tls_certificate_source == "acm_private_ca" ? var.private_ca_arn != null :
         var.tls_certificate_source == "acm_public" ? var.route53_zone_id != null :
+        var.tls_certificate_source == "acm_imported" ? var.imported_certificate != null :
         var.certificate_arn != null
       )
-      error_message = "tls_certificate_source needs its input: private_ca_arn for acm_private_ca, route53_zone_id for acm_public, certificate_arn for acm_existing."
+      error_message = "tls_certificate_source needs its input: private_ca_arn for acm_private_ca, route53_zone_id for acm_public, certificate_arn for acm_existing, imported_certificate for acm_imported."
     }
     precondition {
       condition     = alltrue([for c in local.colours : contains(keys(var.proxy_node_colours), c)])

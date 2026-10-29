@@ -133,7 +133,7 @@ variable "route53_zone_id" {
 }
 
 variable "tls_certificate_source" {
-  description = "Server certificate on the ALB: acm_private_ca (AWS Private CA), acm_public (DNS-validated in route53_zone_id) or acm_existing (certificate_arn)."
+  description = "Server certificate on the ALB: acm_private_ca (AWS Private CA), acm_public (DNS-validated in route53_zone_id), acm_existing (certificate_arn) or acm_imported (imported_certificate, e.g. a test CA's certificate in dev)."
   type        = string
   default     = "acm_private_ca"
 }
@@ -148,6 +148,17 @@ variable "certificate_arn" {
   description = "ACM certificate covering both host names, for acm_existing."
   type        = string
   default     = null
+}
+
+variable "imported_certificate" {
+  description = "PEM certificate (covering both host names), its private key and optional chain, imported into ACM for acm_imported. The key is kept in Terraform state: meant for dev and test certificates."
+  type = object({
+    certificate_pem       = string
+    private_key_pem       = string
+    certificate_chain_pem = optional(string)
+  })
+  default   = null
+  sensitive = true
 }
 
 variable "alb_ssl_policy" {

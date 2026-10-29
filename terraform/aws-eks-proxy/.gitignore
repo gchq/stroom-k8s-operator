@@ -11,3 +11,8 @@ override.tf.json
 
 # Throwaway test certificates and keys (scripts/make-test-certs.sh).
 envs/*/test-certs/
+
+# Per-person values (account, IP, state bucket) layered over an environment's
+# committed files: envs/<env>/local-*.tfvars and local-backend.hcl.
+envs/*/local-*.tfvars
+envs/*/local-backend.hcl

@@ -9,17 +9,33 @@ retention, throwaway test certificates.
 * [ ] A dev AWS account and a role that can create VPC, EKS, IAM, KMS, S3,
       SQS, ELB, ACM and Route 53 resources.
 * [ ] An S3 bucket for Terraform state (versioned, encrypted, private).
-* [ ] A server certificate source: an AWS Private CA (`private_ca_arn`), or a
-      public Route 53 zone (`tls_certificate_source = "acm_public"`,
-      `route53_zone_id`).
-* [ ] Host names for the two endpoints, in a zone you control.
+* [ ] Nothing for DNS or the server certificate: dev uses made-up names
+      (`proxy.dev.test`, `mtls.proxy.dev.test`) and a server certificate from
+      the test server CA, imported into ACM (`acm_imported`). With a real
+      domain, use `acm_public` and `route53_zone_id` instead.
+* [ ] An EC2 vCPU quota of at least 16 (Running On-Demand Standard
+      instances): 10 for the nodes, 16 during a blue/green test. New accounts
+      start at 5.
 * [ ] The public IP of the machine that will run Terraform and the tests.
 * [ ] Terraform 1.10+, the AWS CLI, kubectl, curl, openssl.
-* [ ] Replace every `REPLACE_ME`, then check none are left:
+* [ ] Put your own values in git-ignored override files, so the committed
+      files keep their `REPLACE_ME` placeholders. Terraform takes the later
+      file's value, so these win:
+
+      envs/dev/local-backend.hcl        bucket = "<state bucket>"
+      envs/dev/local-10-infra.tfvars    api_allowed_cidrs
+      envs/dev/local-20-platform.tfvars infra_state (with your bucket)
+      envs/dev/local-30-stroom-proxy.tfvars
+                                        infra_state, platform_state,
+                                        allowed_ingress_cidrs, admin_cidrs
+
+      Check every `REPLACE_ME` in the committed files is overridden:
 
       grep -rn REPLACE_ME envs/dev
 
-* [ ] Make the test certificates (git-ignored, valid 30 days):
+* [ ] Make the test certificates (git-ignored, valid 30 days). Pass the host
+      names as the third and fourth arguments if you change them in the
+      tfvars:
 
       scripts/make-test-certs.sh envs/dev/test-certs
 
@@ -29,32 +45,40 @@ Run from `terraform/aws-eks-proxy`, one stack at a time, checking each plan:
 
 ```sh
 cd stacks/10-infra
-terraform init -backend-config=../../envs/dev/backend-10-infra.hcl
-terraform plan -var-file=../../envs/dev/10-infra.tfvars -out=dev.tfplan
+terraform init -backend-config=../../envs/dev/backend-10-infra.hcl -backend-config=../../envs/dev/local-backend.hcl
+terraform plan -var-file=../../envs/dev/10-infra.tfvars -var-file=../../envs/dev/local-10-infra.tfvars -out=dev.tfplan
 terraform apply dev.tfplan
 $(terraform output -raw kubeconfig_command)
 kubectl get nodes -L topology.kubernetes.io/zone,workload,stroom-proxy/colour
 
 cd ../20-platform
-terraform init -backend-config=../../envs/dev/backend-20-platform.hcl
-terraform plan -var-file=../../envs/dev/20-platform.tfvars -out=dev.tfplan
+terraform init -backend-config=../../envs/dev/backend-20-platform.hcl -backend-config=../../envs/dev/local-backend.hcl
+terraform plan -var-file=../../envs/dev/20-platform.tfvars -var-file=../../envs/dev/local-20-platform.tfvars -out=dev.tfplan
 terraform apply dev.tfplan
 
 cd ../30-stroom-proxy
-terraform init -backend-config=../../envs/dev/backend-30-stroom-proxy.hcl
-terraform plan -var-file=../../envs/dev/30-stroom-proxy.tfvars -out=dev.tfplan
+terraform init -backend-config=../../envs/dev/backend-30-stroom-proxy.hcl -backend-config=../../envs/dev/local-backend.hcl
+terraform plan -var-file=../../envs/dev/30-stroom-proxy.tfvars -var-file=../../envs/dev/local-30-stroom-proxy.tfvars -out=dev.tfplan
 terraform apply dev.tfplan
 terraform output endpoints
 ```
 
-If `route53_zone_id` is null, point the two host names at the NLBs
-(`nlb_dns_name` in the `endpoints` output), or add `--resolve` to curl.
+`route53_zone_id` is null, so nothing resolves the host names. Look up an
+address of each NLB (`nlb_dns_name` in the `endpoints` output) and give curl
+`--resolve`:
+
+```sh
+MTLS_IP=$(dig +short <mtls nlb_dns_name> | head -1)
+PLAIN_IP=$(dig +short <plain nlb_dns_name> | head -1)
+CURL_MTLS="curl --cacert test-certs/server-ca.pem --resolve mtls.proxy.dev.test:443:$MTLS_IP"
+CURL_PLAIN="curl --cacert test-certs/server-ca.pem --resolve proxy.dev.test:443:$PLAIN_IP"
+```
 
 ## Tests
 
-Set `MTLS=https://<mtls_hostname>` and `PLAIN=https://<hostname>`, and use
-`--cacert` with your server CA if it isn't publicly trusted. The certificates
-are in `envs/dev/test-certs/`.
+Set `MTLS=https://mtls.proxy.dev.test` and `PLAIN=https://proxy.dev.test`,
+and use `$CURL_MTLS` and `$CURL_PLAIN` (above) in place of `curl`. The
+certificates are in `envs/dev/test-certs/`.
 
 ### Platform (10-infra, 20-platform)
 

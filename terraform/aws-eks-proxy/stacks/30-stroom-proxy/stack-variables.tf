@@ -6,3 +6,13 @@ variable "client_ca_bundle_pem_file" {
   type        = string
   default     = null
 }
+
+variable "imported_certificate_files" {
+  description = "Paths to a PEM server certificate, its private key and optional chain, relative to where Terraform runs. Overrides imported_certificate (for tls_certificate_source = \"acm_imported\"), e.g. the test certificates from scripts/make-test-certs.sh."
+  type = object({
+    certificate       = string
+    private_key       = string
+    certificate_chain = optional(string)
+  })
+  default = null
+}

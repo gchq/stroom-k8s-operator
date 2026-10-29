@@ -232,6 +232,32 @@ run "privatelink" {
   }
 }
 
+run "imported_certificate" {
+  command = plan
+
+  module {
+    source = "../../modules/stroom-proxy"
+  }
+
+  variables {
+    tls_certificate_source = "acm_imported"
+    imported_certificate = {
+      certificate_pem = "test certificate"
+      private_key_pem = "test key"
+    }
+  }
+
+  assert {
+    condition     = length(aws_acm_certificate.imported) == 1 && length(aws_acm_certificate.private) == 0 && length(aws_acm_certificate.public) == 0
+    error_message = "acm_imported should import the certificate and request no other."
+  }
+
+  assert {
+    condition     = nonsensitive(aws_acm_certificate.imported[0].certificate_body) == "test certificate"
+    error_message = "The imported certificate should be imported_certificate.certificate_pem."
+  }
+}
+
 run "no_certificate_auth" {
   command = plan
 
@@ -501,6 +527,20 @@ run "rejects_certificate_auth_without_ca_bundle" {
         client_id         = "stroom-proxy"
       }
     }
+  }
+
+  expect_failures = [terraform_data.input_checks]
+}
+
+run "rejects_imported_without_certificate" {
+  command = plan
+
+  module {
+    source = "../../modules/stroom-proxy"
+  }
+
+  variables {
+    tls_certificate_source = "acm_imported"
   }
 
   expect_failures = [terraform_data.input_checks]

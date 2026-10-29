@@ -23,8 +23,11 @@ terraform/aws-eks-proxy/
 │   ├── 10-infra/         # network + eks
 │   ├── 20-platform/      # platform, reading 10-infra's outputs from its state
 │   └── 30-stroom-proxy/  # the proxy, reading both earlier stacks' outputs
-└── envs/
-    └── example/          # backend config and tfvars for one environment
+├── envs/
+│   ├── example/          # backend config and tfvars for one environment
+│   └── dev/              # a small test environment, with an apply and test checklist
+└── scripts/
+    └── make-test-certs.sh  # throwaway client and server CAs for dev
 ```
 
 Each stack has its own state, so a cluster rebuild doesn't force workload
@@ -158,7 +161,8 @@ image without a digest, and more.
 ## Usage
 
 Copy `envs/example` to `envs/<env>`, then edit the backend files (state bucket
-and key) and the tfvars. Apply the stacks in order.
+and key) and the tfvars. Apply the stacks in order. For a first test
+deployment, `envs/dev/README.md` has the steps and a test checklist.
 
 ### 10-infra
 
@@ -275,8 +279,8 @@ See `stacks/20-platform/variables.tf` for the full list.
 | `allowed_ingress_cidrs` | (required) | Who may reach the NLBs directly. |
 | `admin_cidrs` | `[]` | Who may reach the ALB's test listeners for the inactive colour. |
 | `hostname`, `mtls_hostname` | (required) | Non-mTLS and mTLS endpoints. |
-| `tls_certificate_source` | `acm_private_ca` | With `private_ca_arn`; or `acm_public` (with `route53_zone_id`) or `acm_existing` (with `certificate_arn`). |
-| `auth` | cert + token + DFK | `types`, `client_ca_bundle_pem`, `dfk_s3_prefix`, `openid`, … (design section 6). |
+| `tls_certificate_source` | `acm_private_ca` | With `private_ca_arn`; or `acm_public` (with `route53_zone_id`), `acm_existing` (with `certificate_arn`) or `acm_imported` (with `imported_certificate`, or `imported_certificate_files` for paths; the key is kept in state, so dev only). |
+| `auth` | cert + token + DFK | `types`, `client_ca_bundle_pem`, `dfk_s3_prefix`, `openid`, … (design section 6). `client_ca_bundle_pem_file` reads the bundle from a file. |
 | `downstream`, `receipt` | `null`, `RECEIVE_ALL` | Optional downstream Stroom. |
 | `privatelink` | off | `enabled`, `allowed_principals`, `acceptance_required`, `verification_zone_id`. |
 | `data_retention_days` | (required) | COMPLIANCE retention: can't be shortened. |

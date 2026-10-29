@@ -29,14 +29,19 @@ proxy_data_volume_gb = 20
 allowed_ingress_cidrs = ["REPLACE_ME/32"]
 admin_cidrs           = ["REPLACE_ME/32"]
 
-hostname        = "proxy.dev.REPLACE_ME"
-mtls_hostname   = "mtls.proxy.dev.REPLACE_ME"
-route53_zone_id = null # set to create the DNS records; otherwise use the endpoints output
+# Made-up names, no DNS: tests reach the NLBs with curl --resolve. They must
+# match the server certificate from scripts/make-test-certs.sh.
+hostname        = "proxy.dev.test"
+mtls_hostname   = "mtls.proxy.dev.test"
+route53_zone_id = null
 
-# One of:
-tls_certificate_source = "acm_private_ca"
-private_ca_arn         = "REPLACE_ME"
-# tls_certificate_source = "acm_public"   # needs route53_zone_id (public zone)
+# Server certificate signed by the throwaway test server CA, imported into ACM.
+# With a real domain, use acm_public and route53_zone_id instead.
+tls_certificate_source = "acm_imported"
+imported_certificate_files = {
+  certificate = "../../envs/dev/test-certs/server.pem"
+  private_key = "../../envs/dev/test-certs/server.key"
+}
 
 privatelink = {
   enabled = false # turn on for the PrivateLink tests (needs a second VPC/account)
