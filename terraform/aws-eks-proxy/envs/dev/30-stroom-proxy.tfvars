@@ -69,3 +69,16 @@ receipt = { check_mode = "RECEIVE_ALL" }
 data_retention_days         = 1
 data_expire_after_retention = true
 data_notifications          = "sqs"
+
+# Dev: also log the identity headers the ALB passes, so the receive log shows
+# which DN the proxy was given (RemoteDN is empty behind the ALB: the TLS
+# session ends there). The list replaces the proxy's default metaKeys.
+extra_proxy_config = {
+  logStream = {
+    metaKeys = [
+      "guid", "receiptid", "feed", "system", "environment",
+      "remotehost", "remoteaddress", "remotedn", "remotecertexpiry",
+      "x-stroom-mtls-subject", "x-amzn-mtls-clientcert-subject",
+    ]
+  }
+}
