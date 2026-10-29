@@ -113,10 +113,13 @@ certificates are in `envs/dev/test-certs/`.
       other credentials returns **403 from the ALB** (not 200 from the proxy).
       Repeat with `X-Amzn-Mtls-Clientcert-Subject` and `X-SSL-CLIENT-S-DN`.
 * [ ] Data feed key: upload a DataFeedIdentities file to
-      `s3://<receipt_config_bucket>/dfk/` (format: Stroom docs, "Data Feed
-      Identities"); within `dfk_sync_interval_seconds` a request with
-      `Authorization: Bearer <key>` returns 200. Delete the file: within the
-      interval the same request returns 401.
+      `s3://<receipt_config_bucket>/dfk/`; within `dfk_sync_interval_seconds`
+      a request with `Authorization: Bearer <key>` and a matching `AccountId`
+      header returns 200. Delete the file: within the interval the same
+      request returns 401. The key is `sdk_` plus 128 base58 characters, and
+      the file must use `"hashAlgorithm": "ARGON2"`: BCrypt keys never
+      authenticate in 7.14-beta.8 (design F25). Don't try the key before it
+      has synced: the proxy caches the failure for 5 minutes (F26).
 * [ ] Token (if `TOKEN` and `openid` are set): a token from the IdP returns 200.
 
 ### Network isolation
