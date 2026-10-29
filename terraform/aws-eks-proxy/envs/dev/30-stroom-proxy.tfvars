@@ -18,6 +18,9 @@ proxy_deployments = {
 }
 active_colour = "blue"
 
+# The chart from this checkout (it isn't published yet). Relative to the stack.
+chart_path = "../../../../charts/stroom-proxy"
+
 proxy_resources = {
   requests = { cpu = "500m", memory = "3Gi" }
   limits   = { cpu = "1500m", memory = "3Gi" }
@@ -26,6 +29,10 @@ proxy_data_volume_gb = 20
 
 # Who sends test data, and who may use the test listeners (:9443/:9444).
 # Usually the same machine: "<its IP or network>/32".
+# Internet-facing NLBs, so a machine outside the VPC can send test data; still
+# limited to allowed_ingress_cidrs. (The ALB, and so its test listeners, stays
+# internal: test those from inside the VPC.)
+load_balancer_scheme  = "internet-facing"
 allowed_ingress_cidrs = ["REPLACE_ME/32"]
 admin_cidrs           = ["REPLACE_ME/32"]
 
