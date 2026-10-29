@@ -1,0 +1,73 @@
+# The values terraform/aws-eks-proxy/modules/stroom-proxy renders for its
+# default deployment (cert + OIDC + DFK, S3 forwarding, no downstream), taken
+# from its helm_values output. Validated here so the Terraform's rendering is
+# checked against the proxy image too. Refresh it when the module's rendering
+# changes: terraform test -verbose in stacks/30-stroom-proxy prints it.
+"colour": "blue"
+"dfkSync":
+  "bucket": "stroom-proxy-test-rcfg-123456789012-eu-west-2"
+  "enabled": true
+  "intervalSeconds": 60
+  "prefix": "dfk/"
+"drain":
+  "deregistrationDelaySeconds": 120
+"extraEnvFrom": []
+"healthCheckPath": "/proxyAdmin/filteredhealthcheck?minimal=true&deny=stroom.proxy.app.handler.RemoteFeedStatusClient,stroom.proxy.app.ReceiveDataRuleSetClient,stroom.proxy.app.security.ProxyApiKeyCheckClient,stroom.proxy.app.handler.RemoteS3EventClient,stroom.security.common.impl.ExternalIdpConfigurationProvider"
+"image":
+  "digest": "sha256:f729b691b7001dbf7d2b99fcae9d6c150c99fddd0840f4f3375f43edb34ff68f"
+  "tag": "v7.14-beta.8"
+"javaOpts": "-XX:InitialRAMPercentage=50 -XX:MaxRAMPercentage=60"
+"persistence":
+  "size": "200Gi"
+  "storageClassName": "gp3"
+"ports":
+  "admin": 8091
+  "https": 8443
+"proxyConfig":
+  "aggregator":
+    "aggregationFrequency": "PT10M"
+    "enabled": true
+    "maxItemsPerAggregate": 1000
+    "maxUncompressedByteSize": "1.0G"
+  "downstreamHost":
+    "enabled": false
+  "forwardS3Destinations":
+  - "client":
+      "bucketName": "stroom-proxy-test-data-123456789012-eu-west-2"
+      "keyPattern": "${type}/${year}/${month}/${day}/${feed}/${uuid}.zip"
+      "multipart": true
+      "region": "eu-west-2"
+    "name": "data-bucket"
+    "notificationType": "S3_EVENT"
+  "proxyId": "stroom-proxy-test-${POD_NAME}"
+  "receive":
+    "authenticationRequired": true
+    "dataFeedOwnerMetaKey": "AccountId"
+    "enabledAuthenticationTypes":
+    - "CERTIFICATE"
+    - "TOKEN"
+    - "DATA_FEED_KEY"
+    "fallbackReceiveAction": "RECEIVE"
+    "receiptCheckMode": "RECEIVE_ALL"
+    "x509CertificateDnFormat": "LDAP"
+    "x509CertificateDnHeader": "X-Stroom-Mtls-Subject"
+  "security":
+    "authentication":
+      "openId":
+        "allowedAudiences":
+        - "stroom-proxy"
+        "clientId": "stroom-proxy"
+        "identityProviderType": "EXTERNAL_IDP"
+        "issuer": "https://login.example.com/realms/stroom"
+        "uniqueIdentityClaim": "sub"
+"replicas": 3
+"resources":
+  "limits":
+    "cpu": "2"
+    "memory": "4Gi"
+  "requests":
+    "cpu": "1"
+    "memory": "4Gi"
+"serviceAccount":
+  "create": true
+  "name": "stroom-proxy-blue"

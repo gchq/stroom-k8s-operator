@@ -4,9 +4,11 @@ Terraform that builds an EKS cluster and runs Stroom-Proxy 7.14 on it,
 receiving data over HTTPS on port 443. The design is in
 [`design/proxy-eks-terraform-design.md`](../../design/proxy-eks-terraform-design.md).
 
-**Status:** phases 1 and 2 (the `10-infra` and `20-platform` stacks) are
-written. The proxy stack (`30-stroom-proxy`) and the `stroom-proxy` Helm chart
-come in later phases.
+**Status:** all three stacks are written, with the
+[`stroom-proxy` Helm chart](../../charts/stroom-proxy). Nothing has been
+applied to AWS yet. Two colours can already run side by side (with test
+listeners for the inactive one); canary weights, the queue status script and
+the runbooks come in the next phase.
 
 ## Layout
 
@@ -15,10 +17,12 @@ terraform/aws-eks-proxy/
 ├── modules/
 │   ├── network/          # VPC, subnets, NAT gateways, optional VPC endpoints (or an existing VPC)
 │   ├── eks/              # EKS cluster, system and proxy node groups, add-ons
-│   └── platform/         # LB controller, gp3 StorageClass, CloudWatch, External Secrets
+│   ├── platform/         # LB controller, gp3 StorageClass, CloudWatch, External Secrets
+│   └── stroom-proxy/     # buckets, ALB, NLBs, PrivateLink, IAM, Kubernetes objects, Helm releases
 ├── stacks/
 │   ├── 10-infra/         # network + eks
-│   └── 20-platform/      # platform, reading 10-infra's outputs from its state
+│   ├── 20-platform/      # platform, reading 10-infra's outputs from its state
+│   └── 30-stroom-proxy/  # the proxy, reading both earlier stacks' outputs
 └── envs/
     └── example/          # backend config and tfvars for one environment
 ```
@@ -95,6 +99,51 @@ Everything runs on the system nodes.
 The controllers are given the region and VPC ID explicitly, because the IMDS
 hop limit of 1 stops pods reading them from instance metadata.
 
+## What `30-stroom-proxy` creates
+
+The proxy and everything in front of and behind it (design sections 5 to 9).
+
+* **Two endpoints**, both HTTPS on 443:
+  * `mtls_hostname`: an internal NLB forwarding to the ALB's mTLS listener
+    (`:8443`). The ALB verifies client certificates against a trust store built
+    from the client CA bundle in S3, and passes the subject DN to the proxy in
+    `X-Stroom-Mtls-Subject`. Only created when certificate authentication is
+    enabled.
+  * `hostname`: an internal NLB forwarding to the ALB's plain listener
+    (`:443`), for OIDC tokens and data feed keys. A rule rejects (403) any
+    request carrying a DN header, so no one can claim a certificate identity
+    here.
+* **ALB** (internal, in the lb subnets): ACM certificate for both names,
+  X-Forwarded-For removed (a client could otherwise forge its address in the
+  receive log), optional WAF and access logs. One target group per colour;
+  both listeners forward to the active colour's. While a second colour exists,
+  test listeners (`:9443` mTLS, `:9444` plain, reachable from `admin_cidrs`)
+  forward to it: without a listener its target group wouldn't health-check
+  its pods, so they would never become Ready.
+* **PrivateLink** (optional): one VPC endpoint service per NLB, with the
+  endpoints' host names as private DNS names.
+* **Data bucket**: versioning, Object Lock in COMPLIANCE mode with
+  `data_retention_days`, SSE-KMS with its own key (only the lock admins can
+  disable or delete it), a bucket policy denying the proxy anything but
+  adding objects. New objects are announced on an SQS queue (with a
+  dead-letter queue). Terraform never deletes it (`prevent_destroy`).
+* **Receipt config bucket**: versioned, for the DFK files (`dfk/`) and the
+  client CA bundle (`trust/client-ca.pem`, uploaded from
+  `auth.client_ca_bundle_pem`). An existing bucket can be named instead.
+* **IAM**: the proxy's Pod Identity role (add objects to the data bucket, read
+  the DFK files) and one association per colour's service account.
+* **Kubernetes**: the namespace (restricted Pod Security Standard, readiness
+  gate injection), a NetworkPolicy allowing traffic to the proxies only from
+  the lb subnets, a `SecretStore` and `ExternalSecret` for any secrets (the
+  downstream API key, the OIDC client secret), a `TargetGroupBinding` per
+  colour, and the `stroom-proxy` Helm release per colour.
+
+Plan-time checks reject inconsistent inputs: token auth without an IdP or a
+downstream, a receipt mode that needs a downstream without one, certificate
+auth without a CA bundle, more replicas than the colour has nodes, a colour
+without nodes, an S3 key template without `${uuid}` or `${receiptId}`, an
+image without a digest, and more.
+
 ## Prerequisites
 
 * Terraform 1.10 or later.
@@ -102,7 +151,9 @@ hop limit of 1 stops pods reading them from instance metadata.
   KMS and EC2 resources.
 * An S3 bucket for Terraform state (versioned, encrypted, access-restricted).
   State locking uses S3 itself (`use_lockfile`), so no DynamoDB table is needed.
-* The AWS CLI and `kubectl`, to check the cluster afterwards.
+* The AWS CLI and `kubectl`, to check the cluster afterwards. `30-stroom-proxy`
+  also needs the AWS CLI and `python3` at plan time if `data_bucket_name`
+  names an existing bucket (to check its Object Lock settings).
 
 ## Usage
 
@@ -156,6 +207,34 @@ kubectl get pods -n amazon-cloudwatch -o wide   # fluent-bit on every node, prox
 kubectl get storageclass                        # gp3 (default)
 ```
 
+### 30-stroom-proxy
+
+Set `infra_state` and `platform_state` in `30-stroom-proxy.tfvars`, the
+deployment (image tag and digest from `scripts/latest-proxy-tag.sh` once it
+exists), the host names, the certificate source, `allowed_ingress_cidrs`,
+`auth` (including the client CA bundle) and `data_retention_days`.
+
+```sh
+cd stacks/30-stroom-proxy
+terraform init -backend-config=../../envs/<env>/backend-30-stroom-proxy.hcl
+terraform plan  -var-file=../../envs/<env>/30-stroom-proxy.tfvars -out=30-stroom-proxy.tfplan
+terraform apply 30-stroom-proxy.tfplan
+```
+
+The apply waits until the proxies are healthy in their target group. Then
+upload the senders' data feed key files to
+`s3://<receipt_config_bucket>/dfk/`; each proxy picks them up within
+`dfk_sync_interval_seconds`. If `route53_zone_id` isn't set, point the host
+names at the NLBs (`endpoints` output). With PrivateLink, accept senders'
+endpoint connections and add the private DNS verification TXT records
+(`endpoints` output) unless `privatelink.verification_zone_id` does it.
+
+```sh
+kubectl -n stroom-proxy get pods -o wide
+curl --cert client.pem --key client.key https://<mtls_hostname>/datafeed -H 'Feed: TEST' --data-binary @file
+curl -H "Authorization: Bearer <token>" https://<hostname>/datafeed -H 'Feed: TEST' --data-binary @file
+```
+
 ## Main inputs (10-infra)
 
 | Variable | Default | Notes |
@@ -187,13 +266,33 @@ See `stacks/10-infra/variables.tf` for the full list.
 
 See `stacks/20-platform/variables.tf` for the full list.
 
+## Main inputs (30-stroom-proxy)
+
+| Variable | Default | Notes |
+|---|---|---|
+| `infra_state`, `platform_state` | (required) | Where the earlier stacks' state is. |
+| `proxy_deployments`, `active_colour` | (required) | `{ <colour> = { image_tag, image_digest, replicas } }`; the digest is required. |
+| `allowed_ingress_cidrs` | (required) | Who may reach the NLBs directly. |
+| `admin_cidrs` | `[]` | Who may reach the ALB's test listeners for the inactive colour. |
+| `hostname`, `mtls_hostname` | (required) | Non-mTLS and mTLS endpoints. |
+| `tls_certificate_source` | `acm_private_ca` | With `private_ca_arn`; or `acm_public` (with `route53_zone_id`) or `acm_existing` (with `certificate_arn`). |
+| `auth` | cert + token + DFK | `types`, `client_ca_bundle_pem`, `dfk_s3_prefix`, `openid`, … (design section 6). |
+| `downstream`, `receipt` | `null`, `RECEIVE_ALL` | Optional downstream Stroom. |
+| `privatelink` | off | `enabled`, `allowed_principals`, `acceptance_required`, `verification_zone_id`. |
+| `data_retention_days` | (required) | COMPLIANCE retention: can't be shortened. |
+| `data_bucket_name`, `receipt_config_bucket` | `null` | Use existing buckets instead of creating them. |
+| `forward_s3` | `${type}/${year}/${month}/${day}/${feed}/${uuid}.zip`, multipart | The key template must contain `${uuid}` or `${receiptId}`. |
+| `extra_proxy_config` | `{}` | Any other proxy settings, in the proxy's own keys, deep-merged. |
+
+See `stacks/30-stroom-proxy/variables.tf` and `modules/stroom-proxy/variables.tf`.
+
 ## Tests
 
 Both stacks have plan-only tests that use mocked providers, so they need no
 credentials or cluster:
 
 ```sh
-cd stacks/10-infra    # or stacks/20-platform
+cd stacks/10-infra    # or stacks/20-platform, stacks/30-stroom-proxy
 terraform init -backend=false
 terraform test
 ```
@@ -219,6 +318,17 @@ Identity associations. They also check that a throughput above IOPS / 4, a
 retention value CloudWatch doesn't support, a secrets prefix without a
 trailing `/` and a CloudWatch add-on older than 1.7.0 are rejected.
 
+`30-stroom-proxy`'s tests check the stack's wiring, and, in the module: the
+rendered proxy config and Helm values (types preserved, unique S3 keys, a
+proxy ID per pod, the ALB's DN header, drain and health settings matching the
+target group), the listeners and header-rejection rules, both endpoints or
+only the plain one without certificate auth, PrivateLink, secrets, two
+colours, an existing data bucket, and every plan-time check above.
+
+The chart's own validation (`hack/validate-stroom-proxy-chart.sh`) also runs
+the values this stack renders (`charts/stroom-proxy/ci/terraform-values.yaml`)
+through the proxy image's config check.
+
 ## Upgrades
 
 * **Control plane**: change `cluster_version` by one minor version and apply.
@@ -236,7 +346,18 @@ trailing `/` and a CloudWatch add-on older than 1.7.0 are rejected.
 
 ## Destroy
 
-Destroy the stacks in reverse order: `30-stroom-proxy` (once it exists), then
-`20-platform`, then `10-infra`, which removes the cluster and the VPC. EBS volumes holding proxy data are kept
+Destroy the stacks in reverse order: `30-stroom-proxy`, then `20-platform`,
+then `10-infra`, which removes the cluster and the VPC.
+
+The data bucket and its KMS key are protected (`prevent_destroy`), and AWS
+won't delete a bucket that holds locked objects anyway. To destroy
+`30-stroom-proxy`, first remove the bucket, its settings and its key from the
+state, so Terraform leaves them in place:
+
+```sh
+terraform state list \
+  | grep -E '^module\.stroom_proxy\.(aws_s3_bucket[a-z_]*\.data|aws_kms_(key|alias)\.data)\[' \
+  | xargs terraform state rm
+``` EBS volumes holding proxy data are kept
 when the proxy is removed (by design), so look for them afterwards. The EBS
 CSI driver tags them with their PVC name (`kubernetes.io/created-for/pvc/name`).

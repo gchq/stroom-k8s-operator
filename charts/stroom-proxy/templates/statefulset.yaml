@@ -178,6 +178,12 @@ spec:
           env:
             - name: JAVA_OPTS
               value: {{ .Values.javaOpts | quote }}
+            # For proxyConfig.proxyId: "<prefix>-${POD_NAME}" gives each pod its
+            # own, stable proxy ID (used in receipt IDs).
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

@@ -51,7 +51,9 @@ with the chart's defaults; lists replace them. The chart sets the paths
 (`path.*`, `contentDir`, `receive.dataFeedIdentitiesDir`) and turns off the
 directory scanner, whatever `proxyConfig` says. Values may refer to
 environment variables as `${NAME}`; supply them with `extraEnv` or
-`extraEnvFrom` (e.g. from a Secret).
+`extraEnvFrom` (e.g. from a Secret). The proxy container always has
+`POD_NAME`: set `proxyId: <prefix>-${POD_NAME}` so each pod has its own,
+stable proxy ID (it appears in receipt IDs; letters, digits and hyphens only).
 
 The chart also checks that at least one forward destination is enabled (the
 proxy refuses to start without one), and marks every destination

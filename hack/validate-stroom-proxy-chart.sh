@@ -99,7 +99,7 @@ boot_test() {
 
   docker run -d --name "${container}" --user 1000:1000 \
     --publish 127.0.0.1::8443 --publish 127.0.0.1::8091 \
-    --env JAVA_OPTS=-Xmx1g \
+    --env JAVA_OPTS=-Xmx1g --env POD_NAME=stroom-proxy-blue-0 \
     --volume "${boot_dir}/config:/stroom-proxy/config:ro" \
     --volume "${boot_dir}/tls:/stroom-proxy/tls:ro" \
     --volume "${boot_dir}/volume:/stroom-proxy/volume" \
@@ -120,10 +120,18 @@ boot_test() {
   datafeed="$(curl -sk -o /dev/null -w '%{http_code}' -X POST -H 'Host: proxy.example.internal' -H 'Feed: BOOT-TEST' \
     --data 'test' "https://127.0.0.1:${https_port}/datafeed" || true)"
 
-  if [ "${health}" = "200" ] && [ "${datafeed}" = "401" ]; then
-    echo "boot OK (health ${health}, unauthenticated datafeed ${datafeed})"
+  # The proxy ID substituted from POD_NAME must be in use.
+  local proxy_id_ok=no
+  # (Logs go to a file first: grep -q would cut the pipe, failing it under pipefail.)
+  docker logs "${container}" > "${boot_dir}/proxy.log" 2>&1
+  if grep -q 'Using configured proxy id: ci-stroom-proxy-blue-0' "${boot_dir}/proxy.log"; then
+    proxy_id_ok=yes
+  fi
+
+  if [ "${health}" = "200" ] && [ "${datafeed}" = "401" ] && [ "${proxy_id_ok}" = "yes" ]; then
+    echo "boot OK (health ${health}, unauthenticated datafeed ${datafeed}, proxy id from POD_NAME)"
   else
-    echo "boot FAILED (health ${health}, unauthenticated datafeed ${datafeed}, expected 200 and 401):"
+    echo "boot FAILED (health ${health}, unauthenticated datafeed ${datafeed}, proxy id from POD_NAME: ${proxy_id_ok}; expected 200, 401, yes):"
     docker logs "${container}" 2>&1 | grep -v '^\s*at ' | tail -40
     result=1
   fi

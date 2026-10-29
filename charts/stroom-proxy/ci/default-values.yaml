@@ -3,6 +3,8 @@
 # test without any AWS access.
 colour: blue
 proxyConfig:
+  # Substituted from the pod's POD_NAME; the boot test checks the proxy accepts it.
+  proxyId: ci-${POD_NAME}
   forwardFileDestinations:
     - name: local
       path: /stroom-proxy/volume/forward

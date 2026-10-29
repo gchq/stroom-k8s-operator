@@ -31,7 +31,7 @@ logSender:
     tag: ci
 
 proxyConfig:
-  proxyId: ci-proxy
+  proxyId: ci-${POD_NAME}
   receive:
     enabledAuthenticationTypes: [CERTIFICATE, CERTIFICATE_IDENTITY, TOKEN, DATA_FEED_KEY]
     receiptCheckMode: RECEIPT_POLICY
