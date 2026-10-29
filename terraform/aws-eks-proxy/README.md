@@ -4,9 +4,9 @@ Terraform that builds an EKS cluster and runs Stroom-Proxy 7.14 on it,
 receiving data over HTTPS on port 443. The design is in
 [`design/proxy-eks-terraform-design.md`](../../design/proxy-eks-terraform-design.md).
 
-**Status:** phase 1 (the `10-infra` stack) is written. The platform stack
-(`20-platform`), the proxy stack (`30-stroom-proxy`) and the `stroom-proxy`
-Helm chart come in later phases.
+**Status:** phases 1 and 2 (the `10-infra` and `20-platform` stacks) are
+written. The proxy stack (`30-stroom-proxy`) and the `stroom-proxy` Helm chart
+come in later phases.
 
 ## Layout
 
@@ -14,9 +14,11 @@ Helm chart come in later phases.
 terraform/aws-eks-proxy/
 ├── modules/
 │   ├── network/          # VPC, subnets, NAT gateways, optional VPC endpoints (or an existing VPC)
-│   └── eks/              # EKS cluster, system and proxy node groups, add-ons
+│   ├── eks/              # EKS cluster, system and proxy node groups, add-ons
+│   └── platform/         # LB controller, gp3 StorageClass, CloudWatch, External Secrets
 ├── stacks/
-│   └── 10-infra/         # network + eks, with its own state
+│   ├── 10-infra/         # network + eks
+│   └── 20-platform/      # platform, reading 10-infra's outputs from its state
 └── envs/
     └── example/          # backend config and tfvars for one environment
 ```
@@ -64,6 +66,35 @@ a cluster that already exists.
   `kube-proxy`, `eks-pod-identity-agent`, and `aws-ebs-csi-driver` with a Pod
   Identity role and its node DaemonSet tolerating the proxy taint.
 
+## What `20-platform` creates
+
+Everything runs on the system nodes.
+
+* **AWS Load Balancer Controller** (Helm chart 3.6.2, Pod Identity role with
+  the controller's published IAM policy). Used only for `TargetGroupBinding`,
+  which registers proxy pods in the ALB target groups that `30-stroom-proxy`
+  creates, and for injecting pod readiness gates. Its ingress class and Service
+  mutator are turned off. Its pod webhook is set to fail closed, so a proxy
+  pod is never created without its readiness gate; two replicas with a
+  PodDisruptionBudget keep the webhook available.
+* **gp3 StorageClass**, the cluster default: encrypted, `WaitForFirstConsumer`
+  (so each volume is created in its pod's AZ), expandable, with `gp3_iops` and
+  `gp3_throughput`.
+* **CloudWatch Observability add-on** (Container Insights metrics, Fluent Bit
+  container logs) with a Pod Identity role. Its pods tolerate all taints (add-on
+  1.7.0 and later, enforced), so logs are collected from the proxy nodes too. Terraform creates its four log
+  groups (`/aws/containerinsights/<cluster>/{application,dataplane,host,performance}`)
+  first, with `log_retention_days`; otherwise logs would be kept forever.
+* **External Secrets Operator** (Helm chart 2.14.0, with its CRDs) and a Pod
+  Identity role that can read only Secrets Manager secrets named
+  `secrets_name_prefix*` (default `stroom-proxy/<name>/`). The `SecretStore`
+  that uses it is created by `30-stroom-proxy`, in the proxy namespace:
+  Terraform can't plan a custom resource in the same apply that installs its
+  CRD.
+
+The controllers are given the region and VPC ID explicitly, because the IMDS
+hop limit of 1 stops pods reading them from instance metadata.
+
 ## Prerequisites
 
 * Terraform 1.10 or later.
@@ -75,8 +106,10 @@ a cluster that already exists.
 
 ## Usage
 
-Copy `envs/example` to `envs/<env>`, then edit `backend-10-infra.hcl` (state
-bucket and key) and `10-infra.tfvars`.
+Copy `envs/example` to `envs/<env>`, then edit the backend files (state bucket
+and key) and the tfvars. Apply the stacks in order.
+
+### 10-infra
 
 ```sh
 cd stacks/10-infra
@@ -100,7 +133,30 @@ If `api_allowed_cidrs` is empty, the Kubernetes API is reachable only from
 inside the VPC (for example over a VPN, Direct Connect or a bastion). The same
 applies to the later stacks, which use the Kubernetes and Helm providers.
 
-## Main inputs
+### 20-platform
+
+Set `infra_state` in `20-platform.tfvars` to the bucket, key and region of the
+`10-infra` state. The machine running Terraform needs read access to that
+state and must be able to reach the Kubernetes API. No AWS CLI is needed:
+the providers authenticate with a token from `aws_eks_cluster_auth`.
+
+```sh
+cd stacks/20-platform
+terraform init -backend-config=../../envs/<env>/backend-20-platform.hcl
+terraform plan  -var-file=../../envs/<env>/20-platform.tfvars -out=20-platform.tfplan
+terraform apply 20-platform.tfplan
+```
+
+Then:
+
+```sh
+kubectl get deploy -n kube-system aws-load-balancer-controller
+kubectl get pods -n external-secrets
+kubectl get pods -n amazon-cloudwatch -o wide   # fluent-bit on every node, proxy nodes included
+kubectl get storageclass                        # gp3 (default)
+```
+
+## Main inputs (10-infra)
 
 | Variable | Default | Notes |
 |---|---|---|
@@ -116,18 +172,33 @@ applies to the later stacks, which use the Kubernetes and Helm providers.
 
 See `stacks/10-infra/variables.tf` for the full list.
 
+## Main inputs (20-platform)
+
+| Variable | Default | Notes |
+|---|---|---|
+| `infra_state` | (required) | `{ bucket, key, region }` of the `10-infra` state. |
+| `lb_controller_chart_version` | `3.6.2` | When changing it, update `modules/platform/lb-controller-iam-policy.json` to the same release's `docs/install/iam_policy.json`, and apply the release's CRDs first: Helm doesn't upgrade the CRDs in the chart's `crds/` directory. |
+| `gp3_iops`, `gp3_throughput` | `3000`, `250` | Also the proxy data volumes' performance. Throughput is at most IOPS / 4. |
+| `ebs_kms_key_arn`, `log_kms_key_arn` | `null` | Customer-managed keys for volumes and log groups; default AWS-managed encryption. |
+| `cloudwatch_addon_version` | `null` | The cluster's default version when first created. If set, v1.7.0 or later. |
+| `log_retention_days` | `90` | Container Insights log groups. |
+| `external_secrets_chart_version` | `2.14.0` | |
+| `secrets_name_prefix` | `stroom-proxy/<name>/` | Secrets Manager prefix the operator may read. |
+
+See `stacks/20-platform/variables.tf` for the full list.
+
 ## Tests
 
-The stack has plan-only tests that use a mocked AWS provider, so they need no
-credentials:
+Both stacks have plan-only tests that use mocked providers, so they need no
+credentials or cluster:
 
 ```sh
-cd stacks/10-infra
+cd stacks/10-infra    # or stacks/20-platform
 terraform init -backend=false
 terraform test
 ```
 
-They check that the default, /20-VPC, blue/green and existing-VPC
+`10-infra`'s tests check that the default, /20-VPC, blue/green and existing-VPC
 configurations plan (including the lb subnet ranges), and that invalid inputs
 are rejected:
 
@@ -140,6 +211,13 @@ are rejected:
 * an open API endpoint and a bad NAT mode.
 
 Spot capacity gives a warning.
+
+`20-platform`'s tests check the controllers' Helm values (region and VPC ID
+set, system node selector, ingress class and Service mutator off, pod webhook
+failing closed), the gp3 parameters, the log groups' retention and the Pod
+Identity associations. They also check that a throughput above IOPS / 4, a
+retention value CloudWatch doesn't support, a secrets prefix without a
+trailing `/` and a CloudWatch add-on older than 1.7.0 are rejected.
 
 ## Upgrades
 
@@ -158,7 +236,7 @@ Spot capacity gives a warning.
 
 ## Destroy
 
-`terraform destroy` in `10-infra` removes the cluster and the VPC. Destroy the
-later stacks first, once they exist. EBS volumes holding proxy data are kept
+Destroy the stacks in reverse order: `30-stroom-proxy` (once it exists), then
+`20-platform`, then `10-infra`, which removes the cluster and the VPC. EBS volumes holding proxy data are kept
 when the proxy is removed (by design), so look for them afterwards. The EBS
 CSI driver tags them with their PVC name (`kubernetes.io/created-for/pvc/name`).
