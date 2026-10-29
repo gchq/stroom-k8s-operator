@@ -21,6 +21,7 @@ mock_provider "aws" {
 mock_provider "helm" {}
 mock_provider "kubernetes" {}
 mock_provider "external" {}
+mock_provider "time" {}
 
 override_data {
   target = data.terraform_remote_state.infra

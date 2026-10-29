@@ -165,7 +165,7 @@ resource "helm_release" "proxy" {
     aws_lb_listener.plain,
     aws_lb_listener.mtls,
     aws_lb_listener.test,
-    aws_eks_pod_identity_association.proxy,
+    time_sleep.pod_identity_propagation,
     aws_iam_role_policy.proxy,
     aws_vpc_security_group_ingress_rule.pods_from_alb,
     aws_s3_bucket_policy.data,

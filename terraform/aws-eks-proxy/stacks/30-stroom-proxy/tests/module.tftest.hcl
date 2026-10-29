@@ -34,6 +34,7 @@ mock_provider "aws" {
 mock_provider "helm" {}
 mock_provider "kubernetes" {}
 mock_provider "external" {}
+mock_provider "time" {}
 
 variables {
   # As 10-infra and 20-platform would output them.
@@ -204,6 +205,11 @@ run "default_deployment" {
   assert {
     condition     = length(kubernetes_manifest.secret_store) == 0
     error_message = "No SecretStore when there are no secrets."
+  }
+
+  assert {
+    condition     = keys(time_sleep.pod_identity_propagation) == ["blue"] && time_sleep.pod_identity_propagation["blue"].create_duration == "30s"
+    error_message = "Each colour's pods must wait for its Pod Identity association to propagate."
   }
 }
 

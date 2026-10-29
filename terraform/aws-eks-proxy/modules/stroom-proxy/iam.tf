@@ -84,3 +84,16 @@ resource "aws_eks_pod_identity_association" "proxy" {
   role_arn        = aws_iam_role.proxy.arn
   tags            = var.tags
 }
+
+# A new association takes a few seconds to reach the EKS Pod Identity webhook.
+# Pods created before then get no credentials (no AWS_CONTAINER_CREDENTIALS_*
+# variables) and stay that way until recreated: in dev, a new colour's
+# dfk-sync init container failed with "Unable to locate credentials".
+resource "time_sleep" "pod_identity_propagation" {
+  for_each = var.proxy_deployments
+
+  create_duration = "30s"
+  triggers = {
+    association_id = aws_eks_pod_identity_association.proxy[each.key].association_id
+  }
+}
