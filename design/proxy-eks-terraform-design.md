@@ -44,6 +44,11 @@ These came from the 7.14 source, Docker Hub, AWS documentation and the public He
 | F17 | The proxy won't start without an enabled forward destination. A destination with no `enabled` key is enabled for HTTP but **disabled** for file and S3 destinations (their JSON constructors default it to false). | The chart marks every destination `enabled: true` unless it says otherwise, and fails to render without one. |
 | F18 | The S3 forwarder's default key template, `${type}/${year}/${month}/${day}/${idPath}/${feed}/${idPadded}.zip`, uses `${idPath}` and `${idPadded}`, which the forwarder doesn't supply; it supplies time variables, `${uuid}`, `${feed}`, `${type}` and `${receiptId}`. | The default doesn't give unique keys. The key template is always set, and must contain `${uuid}` or `${receiptId}` (section 7.1). |
 | F19 | The ALB's default `xff_header_processing_mode` is `append`: it adds the client's address to any `X-Forwarded-For` the client sent. Jetty's forwarded-header handling takes the leftmost entry, which the client controls. | With `useForwardedHeaders`, any sender could write any address into the receive log. The ALB is set to `remove` X-Forwarded-For; the proxy logs the ALB's address, and ALB access logs (optional) keep the real client addresses (section 5.4). |
+| F20 | Dev test, 2026-10-29: on the mTLS listener the ALB **replaces** a client-sent `X-Stroom-Mtls-Subject` with the verified certificate's subject (a forged `CN=someone-else` never reached the proxy). It also **removes** client-sent `X-Amzn-Mtls-*` headers on the non-mTLS listener before evaluating rules. | The mTLS listener needs no 403 rule (section 5.3). The non-mTLS 403 rules for `X-Amzn-Mtls-*` never fire; they are kept as a harmless backstop. The rule for `X-Stroom-Mtls-Subject` is the one that matters, and it returns 403. |
+| F21 | Behind the ALB the proxy logs `RemoteDN=` empty for every request, including ones authenticated by the subject header, because the TLS session ends at the ALB (see F14). The header is logged only when its name is in `logStream.metaKeys`. | To show the authenticated certificate identity in the receive log, add the subject header to `logStream.metaKeys` (done in `envs/dev`; it should become the module default, section 17.1). |
+| F22 | The CloudWatch Observability add-on (v7) auto-monitors every service by default (Application Signals) and injects an OpenTelemetry Java agent init container into Java pods. That container breaks the `restricted` Pod Security level, so the proxy pods were refused. | `20-platform` turns `applicationSignals.autoMonitor.monitorAllServices` off, and the chart annotates its pods `instrumentation.opentelemetry.io/inject-java: "false"`. |
+| F23 | `aws_eks_cluster_auth` tokens are read at plan time, saved in the plan and valid for 15 minutes, so applying a saved plan later failed with `Unauthorized`. | The Kubernetes and Helm providers use `aws eks get-token` (exec) instead; the AWS CLI is a prerequisite. |
+| F24 | A drained rolling update of 3 replicas took 12 m 53 s (about 4–5 minutes a pod: the deregistration delay, then start-up), against the Helm release timeout of 15 minutes. Data with no `Type` header gets keys without the type level (`2026/10/29/<feed>/<uuid>.zip`). | The Helm timeout must grow with the replica count (section 17.1). The key layout without a type is acceptable, but consumers shouldn't assume a type prefix. |
 
 ## 3. Architecture
 
@@ -220,7 +225,7 @@ All three are **internal** and sit in the **lb subnets**. (`load_balancer_scheme
 The proxy trusts the DN header on every request it receives (F14). The design blocks every other path for that header:
 
 1. **Non-mTLS listener**: a priority-1 rule returns 403 for any request carrying `X-Stroom-Mtls-Subject` or any `X-Amzn-Mtls-*` header, whatever its value. Test listener `:9444` has the same rule.
-2. **mTLS listener**: the ALB adds the header after verifying the certificate. Phase 4 tests confirm that a client-supplied `X-Stroom-Mtls-Subject` is replaced, not passed alongside. If it isn't, the same 403 rule is added there too: AWS evaluates rules on the client's request before adding mTLS headers. That ordering is also confirmed in testing.
+2. **mTLS listener**: the ALB adds the header after verifying the certificate, replacing any client-supplied `X-Stroom-Mtls-Subject` (confirmed in dev, F20). No 403 rule is needed there.
 3. **Direct to the pods**: a NetworkPolicy allows 8443 and 8091 **only from the lb subnets** (section 14). Pods, nodes and anything else in the VPC can't reach the proxy port, so they can't send the header around the ALB.
 4. **In-pod callers** (the log-sender) use port 8444 on localhost. It is not exposed outside the pod.
 
@@ -562,7 +567,8 @@ Open items:
 * **Test the current deployment for F14**: send a request to its non-mTLS listener with a made-up DN in the subject header it uses (e.g. `X-Amzn-Mtls-Clientcert-Subject: CN=someone-else`). If the proxy accepts it as certificate authentication, the current deployment allows identity spoofing and needs the section 5.3 rule now.
 * The branch and image name of the non-root log-sender, and when it will be released.
 * `data_retention_days` per environment.
-* To confirm in testing: the ALB replaces a client-supplied subject header on the mTLS listener (5.3), and whether the NLB preserves client IPs to its ALB target (5.4).
+* ~~The ALB replaces a client-supplied subject header on the mTLS listener (5.3)~~: confirmed in dev (F20).
+* To confirm in testing: whether the NLB preserves client IPs to its ALB target (5.4). The proxy only sees the ALB's address, so this needs ALB access logs or VPC flow logs.
 
 ## 16. Implementation phases
 
@@ -604,6 +610,11 @@ A reworked `gchq/stroom-log-sender` already exists on a branch: it runs as uid 1
 * it authenticates with a DFK from the same S3-synced directory.
 
 Logs then go through the proxy's own queue and forwarding into the data bucket. Once it is enabled everywhere, `logging.consoleAppenders` can default to `false` for the receive and send logs, so they aren't stored twice.
+
+### 17.2a From the first dev deployment
+
+* Add the subject header to `logStream.metaKeys` by default in the module, so the receive log records the certificate identity (F21).
+* Set the Helm release timeout from the replica count and drain time, not a fixed 15 minutes (F24).
 
 ### 17.3 Stroom-Proxy changes
 
