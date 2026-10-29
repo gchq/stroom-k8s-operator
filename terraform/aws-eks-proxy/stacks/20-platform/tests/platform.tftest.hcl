@@ -119,6 +119,11 @@ run "module_values" {
   }
 
   assert {
+    condition     = jsondecode(aws_eks_addon.cloudwatch.configuration_values).manager.applicationSignals.autoMonitor.monitorAllServices == false
+    error_message = "Application Signals auto-monitor must be off: its injected agent breaks the proxy's restricted Pod Security level."
+  }
+
+  assert {
     condition     = aws_eks_pod_identity_association.lb_controller.service_account == "aws-load-balancer-controller" && aws_eks_pod_identity_association.external_secrets.namespace == "external-secrets"
     error_message = "Pod Identity associations must match the controllers' service accounts."
   }

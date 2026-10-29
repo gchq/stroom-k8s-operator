@@ -60,6 +60,9 @@ spec:
       annotations:
         # Roll the pods when the config changes.
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        # Keep agents (e.g. the CloudWatch add-on's Application Signals) out:
+        # their injected containers break the "restricted" Pod Security level.
+        instrumentation.opentelemetry.io/inject-java: "false"
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

@@ -169,6 +169,18 @@ resource "aws_eks_addon" "cloudwatch" {
     role_arn        = aws_iam_role.cloudwatch.arn
   }
 
+  # Application Signals' auto-monitor (on by default) injects an OpenTelemetry
+  # agent into every Java pod. Its init container breaks the proxy namespace's
+  # "restricted" Pod Security level, so the pods are refused; and we want
+  # logs and Container Insights, not tracing of the proxy.
+  configuration_values = jsonencode({
+    manager = {
+      applicationSignals = {
+        autoMonitor = { monitorAllServices = false }
+      }
+    }
+  })
+
   resolve_conflicts_on_create = "OVERWRITE"
   resolve_conflicts_on_update = "OVERWRITE"
 
