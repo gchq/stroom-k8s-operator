@@ -1,6 +1,6 @@
 # Stroom-Proxy 7.14 on AWS EKS with Terraform: design
 
-Status: design agreed 2026-10-29 and revised the same day after review comments (PrivateLink, authentication, immutable S3, blue/green upgrades, log sender, and the current ALB topology). See section 15. Phases 1 and 2 (`10-infra`, `20-platform`) and phase 3 (the `stroom-proxy` chart) are written; the Terraform is not yet applied to AWS, while the chart has been validated and boot-tested against the 7.14-beta.8 image. Later phases are not written.
+Status: design agreed 2026-10-29 and revised the same day after review comments (PrivateLink, authentication, immutable S3, blue/green upgrades, log sender, and the current ALB topology). See section 15. Phases 1 to 4 (`10-infra`, `20-platform`, the `stroom-proxy` chart and `30-stroom-proxy`) are written. The Terraform is not yet applied to AWS; the chart, including the values `30-stroom-proxy` renders, has been validated and boot-tested against the 7.14-beta.8 image. Phases 5 and 6 are not written.
 
 ## 1. Goal
 
@@ -36,13 +36,14 @@ These came from the 7.14 source, Docker Hub, AWS documentation and the public He
 | F9 | ingress-nginx, which the chart's Ingress template assumes, was retired by Kubernetes SIG Network in March 2026. | Don't use the chart's Ingress. |
 | F10 | The proxy watches `receive.dataFeedIdentitiesDir` with a Java `WatchService` (`DataFeedIdentitiesDirWatcher`). It loads every `*.json` regular file at start, reloads a file when it is created or modified, and drops that file's keys when it is deleted. | DFKs synced from S3 into that directory take effect without a restart. Files must be written atomically (temporary name not ending `.json`, then rename) so a half-written file is never parsed (section 7.2). |
 | F11 | The S3 forwarder (`ForwardS3DestinationImpl`, `S3ClientHelper`) only calls `PutObject`, with object tags (`Feed`, stream type) and optional multipart upload through the transfer manager. It never deletes or overwrites deliberately, and it doesn't send `If-None-Match`. It uses AWS SDK 2.54, which sends a checksum on every upload by default. | An Object Lock bucket works with it: Object Lock needs a checksum or `Content-MD5` on each put, and the SDK sends one. The proxy's IAM role needs only `s3:PutObject`, `s3:PutObjectTagging` and the multipart actions. A bucket policy can't require `If-None-Match`, so object keys must be unique (section 7.1). |
-| F12 | Dropwizard 5 (`HttpConnectorFactory`) supports `useForwardedHeaders` (and `useProxyProtocol`) on a connector. | The proxy's ALB-facing connector sets `useForwardedHeaders: true`, so the receive log records the sender address from `X-Forwarded-For`. Over PrivateLink that address is the NLB's, not the sender's (section 5.4). |
+| F12 | Dropwizard 5 (`HttpConnectorFactory`) supports `useForwardedHeaders` (and `useProxyProtocol`) on a connector. | Not relied on for sender addresses: see F19 (section 5.4). |
 | F13 | The proxy doesn't include Dropwizard's SSL reload bundle, so its own TLS settings are only read at start-up. | Little impact now: the client trust store and the public server certificate live on the ALB, which updates them without restarts (section 5.2). |
 | F14 | If a request has no real client certificate, the proxy takes the DN from the `x509CertificateDnHeader` header (default `X-SSL-CLIENT-S-DN`). It trusts that header from **any** source when `allowedCertificateProviders` is empty (`CertificateExtractorImpl.getDN`, `isRemoteHostTrustedCertProvider`). The receive config is global, so the proxy can't trust the header on one path (the mTLS listener) and not on another (the non-mTLS listener). | Anyone who can get the DN header to the proxy can claim any certificate identity. The ALB must stop the header arriving through the non-mTLS listener, and only the ALB may reach the proxy pods (section 5.3). Confirmed by test against 7.14-beta.8: a POST with no client certificate and a made-up `X-Stroom-Mtls-Subject` was accepted (200), and the receive log recorded `RemoteDN=` empty, so the claimed identity isn't even logged. **The current deployment should be tested for this** (section 15). |
 | F15 | The image's own config serves the admin endpoints on port **8091** (`/proxyAdmin`). In 7.14 the downstream health checks are `stroom.proxy.app.handler.RemoteFeedStatusClient`, `stroom.proxy.app.ReceiveDataRuleSetClient`, `stroom.proxy.app.security.ProxyApiKeyCheckClient` and `stroom.proxy.app.handler.RemoteS3EventClient` (not `RemoteFeedStatusService`), registered whether or not a downstream is configured. `filteredhealthcheck` answers 500 for an unknown name in `deny`, and reads only one comma-separated `deny` value. | The admin port is 8091. Probes and target-group health checks deny those four checks and the IdP check (`stroom.security.common.impl.ExternalIdpConfigurationProvider`) in one list, so pods stay ready while a downstream or the IdP is down. |
 | F16 | Jetty's SNI host check rejects any request whose Host doesn't match the server certificate (`400 Invalid SNI`). Behind the ALB, Host is the public name; the pod's certificate is self-signed. | The chart sets `disableSniHostCheck: true` on both HTTPS connectors. Without it, every request would fail. |
 | F17 | The proxy won't start without an enabled forward destination. A destination with no `enabled` key is enabled for HTTP but **disabled** for file and S3 destinations (their JSON constructors default it to false). | The chart marks every destination `enabled: true` unless it says otherwise, and fails to render without one. |
 | F18 | The S3 forwarder's default key template, `${type}/${year}/${month}/${day}/${idPath}/${feed}/${idPadded}.zip`, uses `${idPath}` and `${idPadded}`, which the forwarder doesn't supply; it supplies time variables, `${uuid}`, `${feed}`, `${type}` and `${receiptId}`. | The default doesn't give unique keys. The key template is always set, and must contain `${uuid}` or `${receiptId}` (section 7.1). |
+| F19 | The ALB's default `xff_header_processing_mode` is `append`: it adds the client's address to any `X-Forwarded-For` the client sent. Jetty's forwarded-header handling takes the leftmost entry, which the client controls. | With `useForwardedHeaders`, any sender could write any address into the receive log. The ALB is set to `remove` X-Forwarded-For; the proxy logs the ALB's address, and ALB access logs (optional) keep the real client addresses (section 5.4). |
 
 ## 3. Architecture
 
@@ -235,7 +236,9 @@ When `privatelink.enabled`, Terraform creates **two** `aws_vpc_endpoint_service`
 
 Senders create interface endpoints in their VPC, in subnets whose **AZ IDs** match the NLBs' (AZ names differ between accounts). PrivateLink traffic goes through the same ALB listeners and target groups, so blue/green switching applies to it too.
 
-**Sender addresses**: the ALB puts the client address it sees in `X-Forwarded-For`, and the proxy's 8443 connector uses it (`useForwardedHeaders`, F12). For direct traffic this is the sender's address, provided the NLB preserves the client IP to its ALB target (to be confirmed in phase 4). For PrivateLink traffic it is the NLB's private address: an ALB can't take PROXY protocol, so the sender's own address isn't available. The receive log still records the authenticated identity (certificate DN, token subject or DFK owner).
+**Sender addresses**: the ALB removes `X-Forwarded-For` (`xff_header_processing_mode = remove`), because with its default (`append`) a client could put any address it liked first in the header, and Jetty would log that (F19). So the receive log records the ALB's address, not the sender's. Real client addresses are in the ALB access logs (`alb_access_logs_bucket`), for direct traffic; for PrivateLink traffic they would be the NLB's addresses anyway, as an ALB can't take PROXY protocol. The receive log still records the authenticated identity (certificate DN, token subject or DFK owner).
+
+**ALB security group**: if the NLBs preserve client IPs to their ALB target, traffic reaches the ALB from the senders' addresses (or the NLBs' lb-subnet addresses over PrivateLink) rather than from the NLB security groups. The ALB therefore also accepts its listener ports from `allowed_ingress_cidrs` and the lb subnets; it is internal, and these are the same listeners and rules. Testing should confirm which applies.
 
 ## 6. Authentication and receipt options
 
@@ -299,7 +302,7 @@ s3://<receipt-config-bucket>/
     └── *.crl            # optional revocation lists
 ```
 
-Whoever manages senders writes to this bucket. Versioning is on, so the ALB trust store can refer to an exact PEM version. The proxy role can only read `dfk/*`; Elastic Load Balancing reads `trust/*` through the bucket policy.
+Whoever manages senders writes the DFK files to this bucket. The PEM is uploaded by Terraform from `auth.client_ca_bundle_pem`, or, with an existing bucket, already there. Versioning is on, so the ALB trust store refers to an exact PEM version; the identity running Terraform reads it when it creates or updates the trust store. The bucket uses SSE-S3, so that needs no KMS grant. The proxy role can only read `dfk/*`.
 
 **DFKs** reach each proxy pod through:
 
@@ -385,8 +388,8 @@ Rarely needed now that certificates and the trust store live on the ALB, but ava
 1. **One release per colour.** `colour` suffixes resource names, labels pods `stroom-proxy/colour`, and pins them to the colour's nodes (nodeSelector plus a toleration for the proxy taint), so blue and green releases run side by side in one namespace.
 2. **StatefulSet**, one pod per node (required anti-affinity), spread across zones (`maxSkew: 1`), `podManagementPolicy: Parallel`, `persistentVolumeClaimRetentionPolicy` Retain/Retain, a PodDisruptionBudget (`maxUnavailable: 1`). The data volume is mounted once at `/stroom-proxy/volume`, holding `data/`, `temp/` and `logs/`.
 3. **Non-root, `restricted` PSS**: uid/gid 1000 (the image's `proxy` user, which owns `/stroom-proxy`, so the entrypoint's root-only `chown` path is skipped), `fsGroup: 1000` with `OnRootMismatch`, no privilege escalation, all capabilities dropped, `RuntimeDefault` seccomp.
-4. **`proxyConfig` passthrough**: the `proxyConfig` value is the proxy's own config section, in its own keys, deep-merged with chart defaults (CERTIFICATE + TOKEN + DATA_FEED_KEY, `RECEIVE_ALL`, downstream off, the ALB's DN header). New proxy settings need no chart release. The chart forces the paths, the data feed identities directory and the directory scanner off, enables destinations that don't say otherwise and fails without one (F17). Secrets are referenced as `${NAME}` and supplied through `extraEnv` / `extraEnvFrom`.
-5. **Connectors**: 8443 HTTPS with `useForwardedHeaders: true` (from the ALB); 8444 HTTPS bound to `127.0.0.1` (in-pod callers); admin 8091 plain HTTP (F15). No client authentication in Jetty (the ALB checks certificates); SNI host check off (F16); `shutdownGracePeriod` from values.
+4. **`proxyConfig` passthrough**: the `proxyConfig` value is the proxy's own config section, in its own keys, deep-merged with chart defaults (CERTIFICATE + TOKEN + DATA_FEED_KEY, `RECEIVE_ALL`, downstream off, the ALB's DN header). New proxy settings need no chart release. The chart forces the paths, the data feed identities directory and the directory scanner off, enables destinations that don't say otherwise and fails without one (F17). Secrets are referenced as `${NAME}` and supplied through `extraEnv` / `extraEnvFrom`. The pod gets `POD_NAME`, so `proxyId: <prefix>-${POD_NAME}` gives every pod its own stable proxy ID (used in receipt IDs; a shared ID could repeat receipt IDs across pods).
+5. **Connectors**: 8443 HTTPS from the ALB (`useForwardedHeaders: true`, but the ALB removes the header, F19); 8444 HTTPS bound to `127.0.0.1` (in-pod callers); admin 8091 plain HTTP (F15). No client authentication in Jetty (the ALB checks certificates); SNI host check off (F16); `shutdownGracePeriod` from values.
 6. **`tls` init container** (the proxy image's `keytool`): a self-signed certificate in a memory-backed `emptyDir`, kept across container restarts.
 7. **DFK sync**: a `dfk-sync-init` init container and a `dfk-sync` native sidecar (`amazon/aws-cli`, pinned by digest, uid 1000, read-only root filesystem) running `files/s3-sync.sh` (section 7.2).
 8. **Probes and draining**: startup, readiness and liveness probes on `healthCheckPath` (F15); a `preStop` sleep of the deregistration delay plus 15 s, and `terminationGracePeriodSeconds` covering it and Jetty's shutdown (section 9.3).
@@ -487,6 +490,7 @@ privatelink = {
 auth = {
   required               = true
   types                  = ["CERTIFICATE", "TOKEN", "DATA_FEED_KEY"]
+  client_ca_bundle_pem   = "-----BEGIN CERTIFICATE-----\n…"   # uploaded to trust_store_pem_s3_key; or null with an existing receipt_config_bucket
   trust_store_pem_s3_key = "trust/client-ca.pem"
   client_crl_s3_keys     = []
   dfk_s3_prefix          = "dfk/"
@@ -558,7 +562,7 @@ Open items:
 * **Test the current deployment for F14**: send a request to its non-mTLS listener with a made-up DN in the subject header it uses (e.g. `X-Amzn-Mtls-Clientcert-Subject: CN=someone-else`). If the proxy accepts it as certificate authentication, the current deployment allows identity spoofing and needs the section 5.3 rule now.
 * The branch and image name of the non-root log-sender, and when it will be released.
 * `data_retention_days` per environment.
-* To confirm in testing: the ALB replaces a client-supplied subject header on the mTLS listener (5.3), and the NLB preserves client IPs to its ALB target (5.4).
+* To confirm in testing: the ALB replaces a client-supplied subject header on the mTLS listener (5.3), and whether the NLB preserves client IPs to its ALB target (5.4).
 
 ## 16. Implementation phases
 
@@ -574,7 +578,7 @@ Open items:
    * a DFK added to S3 works within `dfk_sync_interval`, and one removed from S3 stops working; a CA added to the PEM in S3 is trusted after `terraform apply`;
    * the same requests work through both PrivateLink endpoints from another VPC;
    * receive log lines are visible in CloudWatch.
-5. Blue/green and draining: the second colour, test listeners, listener switch and canary weights, `proxy-queue-status.sh`, the drain settings, runbooks, and `terraform test` suites for the variable validations. Done when a blue → green → blue cycle under continuous test traffic on both endpoints loses no acknowledged data and senders see no errors other than retried resets.
+5. Blue/green and draining: canary weights, `proxy-queue-status.sh`, `latest-proxy-tag.sh` and runbooks. The second colour, the test listeners, the listener switch, the drain settings and the `terraform test` suites were done in phase 4: the inactive colour's target group needs a listener for its health checks to run, so the test listeners couldn't wait. Done when a blue → green → blue cycle under continuous test traffic on both endpoints loses no acknowledged data and senders see no errors other than retried resets.
 6. Other options: downstream Stroom with `RECEIPT_POLICY` and HTTP forwarding, internet-facing NLBs with public ACM certificates, WAF, `terraform` secret delivery.
 
 ## 17. Future work
