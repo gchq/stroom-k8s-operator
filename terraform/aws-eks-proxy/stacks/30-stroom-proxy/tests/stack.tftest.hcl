@@ -16,9 +16,6 @@ mock_provider "aws" {
   mock_data "aws_iam_session_context" {
     defaults = { issuer_arn = "arn:aws:iam::123456789012:role/terraform" }
   }
-  mock_data "aws_eks_cluster_auth" {
-    defaults = { token = "mock-token" }
-  }
 }
 
 mock_provider "helm" {}

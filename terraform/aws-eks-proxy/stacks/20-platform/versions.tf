@@ -25,24 +25,32 @@ provider "aws" {
   }
 }
 
-# Short-lived token from aws_eks_cluster_auth: no AWS CLI needed on the
-# machine running Terraform. It is valid for 15 minutes, longer than an apply
-# of this stack takes. The Kubernetes API must be reachable from that machine
-# (see api_allowed_cidrs in 10-infra).
-data "aws_eks_cluster_auth" "this" {
-  name = local.infra.cluster_name
-}
-
+# A fresh token from the AWS CLI each time the providers connect, with the
+# same credentials as the aws provider (AWS_PROFILE etc.). Not
+# aws_eks_cluster_auth: its token is read at plan time, saved in the plan and
+# valid for 15 minutes, so applying a saved plan later fails with
+# "Unauthorized". The Kubernetes API must be reachable from the machine
+# running Terraform (see api_allowed_cidrs in 10-infra).
 provider "kubernetes" {
   host                   = local.infra.cluster_endpoint
   cluster_ca_certificate = base64decode(local.infra.cluster_certificate_authority_data)
-  token                  = data.aws_eks_cluster_auth.this.token
+
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", local.infra.cluster_name, "--region", local.infra.aws_region]
+  }
 }
 
 provider "helm" {
   kubernetes = {
     host                   = local.infra.cluster_endpoint
     cluster_ca_certificate = base64decode(local.infra.cluster_certificate_authority_data)
-    token                  = data.aws_eks_cluster_auth.this.token
+
+    exec = {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "aws"
+      args        = ["eks", "get-token", "--cluster-name", local.infra.cluster_name, "--region", local.infra.aws_region]
+    }
   }
 }

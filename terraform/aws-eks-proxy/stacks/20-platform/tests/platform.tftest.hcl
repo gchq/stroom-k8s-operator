@@ -20,12 +20,6 @@ mock_provider "aws" {
       account_id = "123456789012"
     }
   }
-
-  mock_data "aws_eks_cluster_auth" {
-    defaults = {
-      token = "mock-token"
-    }
-  }
 }
 
 mock_provider "helm" {}

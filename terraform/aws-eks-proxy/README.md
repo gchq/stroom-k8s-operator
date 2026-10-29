@@ -154,9 +154,11 @@ image without a digest, and more.
   KMS and EC2 resources.
 * An S3 bucket for Terraform state (versioned, encrypted, access-restricted).
   State locking uses S3 itself (`use_lockfile`), so no DynamoDB table is needed.
-* The AWS CLI and `kubectl`, to check the cluster afterwards. `30-stroom-proxy`
-  also needs the AWS CLI and `python3` at plan time if `data_bucket_name`
-  names an existing bucket (to check its Object Lock settings).
+* The AWS CLI: `20-platform` and `30-stroom-proxy` use `aws eks get-token`
+  to authenticate to the cluster. `30-stroom-proxy` also needs `python3` at
+  plan time if `data_bucket_name` names an existing bucket (to check its
+  Object Lock settings).
+* `kubectl`, to check the cluster afterwards.
 
 ## Usage
 
@@ -192,8 +194,9 @@ applies to the later stacks, which use the Kubernetes and Helm providers.
 
 Set `infra_state` in `20-platform.tfvars` to the bucket, key and region of the
 `10-infra` state. The machine running Terraform needs read access to that
-state and must be able to reach the Kubernetes API. No AWS CLI is needed:
-the providers authenticate with a token from `aws_eks_cluster_auth`.
+state and must be able to reach the Kubernetes API. The providers get a
+fresh token from `aws eks get-token` whenever they connect, so a saved plan
+can be applied any time later.
 
 ```sh
 cd stacks/20-platform

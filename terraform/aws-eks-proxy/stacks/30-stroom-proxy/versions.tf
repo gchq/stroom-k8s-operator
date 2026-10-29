@@ -29,21 +29,27 @@ provider "aws" {
   }
 }
 
-# Short-lived token: no AWS CLI needed for the cluster (see 20-platform).
-data "aws_eks_cluster_auth" "this" {
-  name = local.infra.cluster_name
-}
-
+# A fresh token from the AWS CLI each time (see 20-platform's versions.tf).
 provider "kubernetes" {
   host                   = local.infra.cluster_endpoint
   cluster_ca_certificate = base64decode(local.infra.cluster_certificate_authority_data)
-  token                  = data.aws_eks_cluster_auth.this.token
+
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", local.infra.cluster_name, "--region", local.infra.aws_region]
+  }
 }
 
 provider "helm" {
   kubernetes = {
     host                   = local.infra.cluster_endpoint
     cluster_ca_certificate = base64decode(local.infra.cluster_certificate_authority_data)
-    token                  = data.aws_eks_cluster_auth.this.token
+
+    exec = {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "aws"
+      args        = ["eks", "get-token", "--cluster-name", local.infra.cluster_name, "--region", local.infra.aws_region]
+    }
   }
 }
