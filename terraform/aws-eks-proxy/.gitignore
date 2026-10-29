@@ -8,3 +8,6 @@ override.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
+
+# Throwaway test certificates and keys (scripts/make-test-certs.sh).
+envs/*/test-certs/

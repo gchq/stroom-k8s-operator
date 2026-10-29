@@ -40,6 +40,11 @@ variable "api_allowed_cidrs" {
   default     = []
 
   validation {
+    condition     = alltrue([for c in var.api_allowed_cidrs : can(cidrhost(c, 0))])
+    error_message = "api_allowed_cidrs must contain IPv4 CIDRs, e.g. \"203.0.113.10/32\"."
+  }
+
+  validation {
     condition     = !contains(var.api_allowed_cidrs, "0.0.0.0/0")
     error_message = "api_allowed_cidrs must not contain 0.0.0.0/0. List the networks that need the API, or leave it empty for a private-only endpoint."
   }

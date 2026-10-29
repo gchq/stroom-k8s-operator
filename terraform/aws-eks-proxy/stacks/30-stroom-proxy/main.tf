@@ -12,6 +12,11 @@ locals {
   infra    = data.terraform_remote_state.infra.outputs
   platform = data.terraform_remote_state.platform.outputs
 
+  # The client CA bundle can come from a file (tfvars can't call file()).
+  auth = var.client_ca_bundle_pem_file == null ? var.auth : merge(var.auth, {
+    client_ca_bundle_pem = file(var.client_ca_bundle_pem_file)
+  })
+
   tags = merge(
     {
       Project   = "stroom-proxy"
@@ -76,7 +81,7 @@ module "stroom_proxy" {
   waf_web_acl_arn        = var.waf_web_acl_arn
   privatelink            = var.privatelink
 
-  auth                      = var.auth
+  auth                      = local.auth
   receipt_config_bucket     = var.receipt_config_bucket
   dfk_sync_interval_seconds = var.dfk_sync_interval_seconds
   downstream                = var.downstream

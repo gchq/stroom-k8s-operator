@@ -52,6 +52,11 @@ output "receipt_config_bucket" {
   value       = local.receipt_config_bucket_name
 }
 
+output "client_ca_bundle_sha256" {
+  description = "SHA-256 of the client CA bundle Terraform uploaded (null if it was already in an existing bucket), to confirm which bundle is deployed."
+  value       = var.auth.client_ca_bundle_pem == null ? null : sha256(var.auth.client_ca_bundle_pem)
+}
+
 output "proxy_role_arn" {
   description = "IAM role of the proxy pods (Pod Identity)."
   value       = aws_iam_role.proxy.arn

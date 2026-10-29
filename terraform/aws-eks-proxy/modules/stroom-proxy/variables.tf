@@ -199,6 +199,11 @@ variable "admin_cidrs" {
   description = "CIDRs allowed to reach the ALB's test listeners (:9443 mTLS, :9444 plain), which forward to the inactive colour during a blue/green upgrade. Empty = the listeners exist (they also make the inactive colour's health checks run) but nobody can reach them."
   type        = list(string)
   default     = []
+
+  validation {
+    condition     = alltrue([for c in var.admin_cidrs : can(cidrhost(c, 0))])
+    error_message = "admin_cidrs must contain IPv4 CIDRs."
+  }
 }
 
 variable "hostname" {

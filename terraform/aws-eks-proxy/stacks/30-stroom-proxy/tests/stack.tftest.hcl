@@ -104,3 +104,23 @@ run "stack_plan" {
     error_message = "Unexpected active colour or namespace."
   }
 }
+
+run "client_ca_bundle_from_file" {
+  command = plan
+
+  variables {
+    client_ca_bundle_pem_file = "tests/fixtures/client-ca.pem"
+    auth = {
+      openid = {
+        issuer            = "https://login.example.com/realms/stroom"
+        allowed_audiences = ["stroom-proxy"]
+        client_id         = "stroom-proxy"
+      }
+    }
+  }
+
+  assert {
+    condition     = module.stroom_proxy.client_ca_bundle_sha256 == filesha256("tests/fixtures/client-ca.pem")
+    error_message = "The CA bundle should be read from client_ca_bundle_pem_file."
+  }
+}
