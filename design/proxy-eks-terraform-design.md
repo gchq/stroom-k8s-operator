@@ -205,7 +205,7 @@ All three are **internal** and sit in the **lb subnets**. (`load_balancer_scheme
 * Both NLBs health-check the ALB over HTTPS on port 443 at `/lb-health`. The mTLS listener can't be used for this, because it would reject the health checker's connection, which has no client certificate.
 * Security groups: 443 from `allowed_ingress_cidrs`. `enforce_security_group_inbound_rules_on_private_link_traffic = off`, because PrivateLink access is controlled by the endpoint services (5.4).
 
-**Host names and certificate**: `hostname` (plain, e.g. `proxy.example.internal`) and `mtls_hostname` (e.g. `mtls.proxy.example.internal`) each get a Route 53 alias to their NLB when `route53_zone_id` is set. One ACM certificate on the ALB covers both names (`tls_certificate_source`: `acm_private_ca` through AWS Private CA (the default, for internal names), `acm_public` with DNS validation, or `acm_existing` with a certificate ARN). ACM renews it, with no restarts.
+**Host names and certificate**: `hostname` (plain, e.g. `proxy.example.internal`) and `mtls_hostname` (e.g. `mtls.proxy.example.internal`) each get a Route 53 alias to their NLB when `route53_zone_id` is set. One ACM certificate on the ALB covers both names (`tls_certificate_source`: `acm_private_ca` through AWS Private CA (the default, for internal names), `acm_public` with DNS validation, `acm_existing` with a certificate ARN, or `acm_imported`, which imports a PEM certificate and key: for dev, with a throwaway test CA and made-up names, when there is no domain or Private CA. The key is then in Terraform state, and ACM can't renew an imported certificate). ACM renews the other kinds, with no restarts.
 
 **From the ALB to the pods**: HTTPS on port 8443. The ALB doesn't validate target certificates, so each pod generates a self-signed certificate at start-up (init container). This keeps traffic encrypted inside the VPC without managing a certificate.
 
@@ -474,7 +474,7 @@ admin_cidrs            = ["10.1.2.0/24"]    # test listeners :9443 / :9444
 hostname               = "proxy.example.internal"        # non-mTLS endpoint
 mtls_hostname          = "mtls.proxy.example.internal"   # mTLS endpoint
 route53_zone_id        = "Z0123456789"
-tls_certificate_source = "acm_private_ca"   # acm_private_ca | acm_public | acm_existing
+tls_certificate_source = "acm_private_ca"   # acm_private_ca | acm_public | acm_existing | acm_imported
 private_ca_arn         = "arn:aws:acm-pca:…"
 alb_idle_timeout       = 300
 deregistration_delay   = 120
