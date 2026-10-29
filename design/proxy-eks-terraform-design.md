@@ -1,6 +1,6 @@
 # Stroom-Proxy 7.14 on AWS EKS with Terraform: design
 
-Status: design agreed 2026-10-29 and revised the same day after review comments (PrivateLink, authentication, immutable S3, blue/green upgrades, log sender, and the current ALB topology). See section 15. Phase 1 (`10-infra`, with per-colour proxy node groups) is written but not yet applied to AWS; it needs dedicated load balancer subnets added (section 5.1). Later phases are not written.
+Status: design agreed 2026-10-29 and revised the same day after review comments (PrivateLink, authentication, immutable S3, blue/green upgrades, log sender, and the current ALB topology). See section 15. Phases 1 and 2 (`10-infra` and `20-platform`) are written but not yet applied to AWS. Later phases are not written.
 
 ## 1. Goal
 
@@ -154,7 +154,7 @@ All of these run on the system node group:
 * the AWS Load Balancer Controller (Helm chart, Pod Identity role). It is used only for its `TargetGroupBinding` resource, which registers proxy pod IPs in Terraform-owned ALB target groups (section 5);
 * a `gp3` StorageClass (`WaitForFirstConsumer`, encrypted, `iops` and `throughput` from variables, `allowVolumeExpansion: true`), set as the default;
 * the `amazon-cloudwatch-observability` add-on (Fluent Bit container logs, Container Insights);
-* External Secrets Operator, with a `ClusterSecretStore` for Secrets Manager (section 11).
+* External Secrets Operator, with a Pod Identity role that can read only secrets under `secrets_name_prefix` (default `stroom-proxy/<name>/`, section 11). The `SecretStore` is created by `30-stroom-proxy` in the proxy namespace, because Terraform can't plan a custom resource in the same apply that installs its CRD.
 
 Neither cert-manager nor external-dns is needed: the public server certificate is an ACM certificate on the ALB, and Terraform creates the Route 53 records for the NLBs directly.
 
@@ -163,7 +163,7 @@ Neither cert-manager nor external-dns is needed: the public server certificate i
 * **S3**: the data bucket (versioning, Object Lock, SSE-KMS, bucket policy) and, unless an existing one is given, the receipt config bucket (section 7).
 * **Load balancers**: the ALB with its listeners, rules, trust store, ACM certificate and security group; a target group per colour; the two NLBs with their ALB-type target groups and security groups; and the Route 53 records (section 5).
 * **PrivateLink**: a VPC endpoint service per NLB, when enabled (section 5.4).
-* **Kubernetes**: the namespace (`restricted` Pod Security label, `elbv2.k8s.aws/pod-readiness-gate-inject: enabled`), `ExternalSecret` objects, the NetworkPolicy, and a `TargetGroupBinding` per colour.
+* **Kubernetes**: the namespace (`restricted` Pod Security label, `elbv2.k8s.aws/pod-readiness-gate-inject: enabled`), the Secrets Manager `SecretStore`, `ExternalSecret` objects, the NetworkPolicy, and a `TargetGroupBinding` per colour.
 * **IAM**: the proxy's Pod Identity role and association.
 * **Helm**: a `helm_release` per colour (`stroom-proxy-blue`, `stroom-proxy-green`), with values rendered from Terraform variables (section 13). There is no hand-edited values file.
 
