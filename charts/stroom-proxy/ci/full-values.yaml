@@ -1,0 +1,73 @@
+# Every optional feature on, as 30-stroom-proxy would render it, so the
+# generated config is validated against the proxy image.
+colour: green
+replicas: 3
+
+image:
+  digest: sha256:f729b691b7001dbf7d2b99fcae9d6c150c99fddd0840f4f3375f43edb34ff68f
+
+resources:
+  requests: { cpu: "1", memory: 4Gi }
+  limits: { cpu: "2", memory: 4Gi }
+
+extraEnv:
+  - name: DOWNSTREAM_API_KEY
+    value: ci-not-a-real-key
+  - name: OPENID_CLIENT_SECRET
+    value: ci-not-a-real-secret
+
+persistence:
+  storageClassName: gp3
+  size: 50Gi
+
+dfkSync:
+  enabled: true
+  bucket: stroom-proxy-ci-receipt-config
+  prefix: dfk/
+
+logSender:
+  enabled: true
+  image:
+    tag: ci
+
+proxyConfig:
+  proxyId: ci-proxy
+  receive:
+    enabledAuthenticationTypes: [CERTIFICATE, CERTIFICATE_IDENTITY, TOKEN, DATA_FEED_KEY]
+    receiptCheckMode: RECEIPT_POLICY
+    fallbackReceiveAction: RECEIVE
+    dataFeedOwnerMetaKey: AccountId
+    maxRequestSize: 1073741824
+    feedNameGenerationEnabled: true
+  downstreamHost:
+    enabled: true
+    scheme: https
+    hostname: stroom.example.internal
+    port: 443
+    apiKey: ${DOWNSTREAM_API_KEY}
+  security:
+    authentication:
+      openId:
+        identityProviderType: EXTERNAL_IDP
+        openIdConfigurationEndpoint: https://login.example.com/realms/stroom/.well-known/openid-configuration
+        issuer: https://login.example.com/realms/stroom
+        clientId: stroom-proxy
+        clientSecret: ${OPENID_CLIENT_SECRET}
+        allowedAudiences: [stroom-proxy]
+        uniqueIdentityClaim: sub
+  forwardS3Destinations:
+    - name: data-bucket
+      notificationType: S3_EVENT
+      client:
+        region: eu-west-2
+        bucketName: stroom-proxy-ci-data
+        keyPattern: ${type}/${year}/${month}/${day}/${feed}/${uuid}.zip
+        multipart: true
+  forwardHttpDestinations:
+    - name: downstream
+      forwardUrl: https://stroom.example.internal/stroom/datafeed
+      apiKey: ${DOWNSTREAM_API_KEY}
+  fsync:
+    receivingMode: ENABLED
+  threads:
+    forwardingInputQueueThreadCount: 2

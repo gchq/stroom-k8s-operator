@@ -22,3 +22,22 @@ jobs:
       - name: Build stroom-operator chart
         run: |
           helm package ./charts/stroom-operator
+
+      - name: Build stroom-proxy chart
+        run: |
+          helm package ./charts/stroom-proxy
+
+    # Renders the stroom-proxy chart, validates the generated proxy config with
+    # the proxy image's own "check" command, and boots the proxy with it.
+    validate_stroom_proxy_chart:
+      runs-on: ubuntu-latest
+      steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      - name: Install Helm
+        uses: azure/setup-helm@v3.3
+        with:
+          version: v3.9.0
+      - name: Validate stroom-proxy chart
+        run: |
+          hack/validate-stroom-proxy-chart.sh

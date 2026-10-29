@@ -1,0 +1,13 @@
+apiVersion: v2
+name: stroom-proxy
+description: Stroom-Proxy 7.14 as a StatefulSet, for running behind an AWS load balancer with blue/green upgrades
+type: application
+version: 0.1.0
+appVersion: "v7.14-beta.8"
+kubeVersion: ">= 1.30.0-0"
+home: https://github.com/gchq/stroom-k8s-operator
+sources:
+  - https://github.com/gchq/stroom
+keywords:
+  - stroom
+  - stroom-proxy

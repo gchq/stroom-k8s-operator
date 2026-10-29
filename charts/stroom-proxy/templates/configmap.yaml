@@ -1,0 +1,114 @@
+{{- $home := include "stroom-proxy.home" . }}
+{{- $volume := include "stroom-proxy.volumeDir" . }}
+{{- $logs := printf "%s/logs" $volume }}
+{{- $fmt := "%-6level [%d{yyyy-MM-dd'T'HH:mm:ss.SSS'Z'}] [%t] %logger - %X{code} %msg %n" }}
+{{- $accessFmt := "%h %l \"%u\" [%t] \"%r\" %s %b \"%i{Referer}\" \"%i{User-Agent}\" %D" }}
+
+{{- /* A minute-rolled, gzipped file appender for one log. */}}
+{{- $fileAppender := dict }}
+{{- range $log := list "app" "receive" "send" "access" }}
+{{- $_ := set $fileAppender $log (dict
+      "type" "file"
+      "currentLogFilename" (printf "%s/%s/%s.log" $logs $log $log)
+      "archivedLogFilenamePattern" (printf "%s/%s/%s-%%d{yyyy-MM-dd'T'HH:mm}.log.gz" $logs $log $log)
+      "archivedFileCount" $.Values.logging.archivedFileCount
+      "discardingThreshold" 0
+      "timeZone" "UTC"
+      "logFormat" (ternary $accessFmt $fmt (eq $log "access"))) }}
+{{- end }}
+
+{{- /* Audit loggers: file always; stdout too when consoleAppenders is on. */}}
+{{- $auditLogger := dict }}
+{{- range $log := list "receive" "send" }}
+{{- $appenders := list (get $fileAppender $log) }}
+{{- if $.Values.logging.consoleAppenders }}
+{{- $appenders = append $appenders (dict "type" "console" "timeZone" "UTC" "logFormat" (printf "%s %s" $log $fmt)) }}
+{{- end }}
+{{- $_ := set $auditLogger $log (dict "level" "INFO" "additive" false "appenders" $appenders) }}
+{{- end }}
+
+{{- $requestLogAppenders := list (get $fileAppender "access") }}
+{{- if .Values.logging.consoleAppenders }}
+{{- $requestLogAppenders = append $requestLogAppenders (dict "type" "console" "timeZone" "UTC" "logFormat" (printf "access %s" $accessFmt)) }}
+{{- end }}
+
+{{- /* HTTPS connectors use the self-signed keystore made by the tls init
+       container. The SNI host check is off: requests carry the load
+       balancer's public host name (or localhost), which the pod's own
+       certificate never matches, and Jetty would answer 400 Invalid SNI. */}}
+{{- $https := dict
+      "type" "https"
+      "keyStorePath" (include "stroom-proxy.keystore" .)
+      "keyStorePassword" .Values.tls.keystorePassword
+      "keyStoreType" "PKCS12"
+      "validateCerts" false
+      "needClientAuth" false
+      "wantClientAuth" false
+      "disableSniHostCheck" true }}
+
+{{- $server := dict
+      "applicationContextPath" "/"
+      "adminContextPath" "/proxyAdmin"
+      "shutdownGracePeriod" (printf "%ds" (int .Values.drain.shutdownGracePeriodSeconds))
+      "applicationConnectors" (list
+        (merge (dict "port" .Values.ports.https "useForwardedHeaders" true) $https)
+        (merge (dict "port" .Values.ports.local "bindHost" "127.0.0.1" "useForwardedHeaders" false) $https))
+      "adminConnectors" (list (dict "type" "http" "port" .Values.ports.admin))
+      "requestLog" (dict "appenders" $requestLogAppenders) }}
+
+{{- $logging := dict
+      "level" .Values.logging.level
+      "loggers" (dict
+        "stroom" "INFO"
+        "io.dropwizard" "INFO"
+        "org.glassfish.jersey.logging.LoggingFeature" "OFF"
+        "receive" (get $auditLogger "receive")
+        "send" (get $auditLogger "send"))
+      "appenders" (list
+        (dict "type" "console" "timeZone" "UTC" "logFormat" $fmt)
+        (get $fileAppender "app")) }}
+
+{{- /* Settings the chart owns: paths match the volumes mounted by the StatefulSet. */}}
+{{- $forced := dict
+      "path" (dict "home" $home "data" (printf "%s/data" $volume) "temp" (printf "%s/temp" $volume))
+      "contentDir" (printf "%s/content" $home)
+      "dirScanner" (dict "enabled" false)
+      "receive" (dict "dataFeedIdentitiesDir" (include "stroom-proxy.dfkDir" .)) }}
+{{- $proxyConfig := mergeOverwrite (deepCopy .Values.proxyConfig) $forced }}
+
+{{- /* A forward destination without "enabled" is enabled for HTTP but
+       disabled for file and S3 destinations (their JSON constructors default
+       it to false). Make every destination enabled unless it says otherwise,
+       and count them: the proxy refuses to start without one. */}}
+{{- $enabledDestinations := 0 }}
+{{- range $kind := list "forwardHttpDestinations" "forwardFileDestinations" "forwardS3Destinations" }}
+{{- $destinations := list }}
+{{- range $destination := (get $proxyConfig $kind | default list) }}
+{{- $destination = merge (deepCopy $destination) (dict "enabled" true) }}
+{{- if $destination.enabled }}
+{{- $enabledDestinations = add1 $enabledDestinations }}
+{{- end }}
+{{- $destinations = append $destinations $destination }}
+{{- end }}
+{{- $_ := set $proxyConfig $kind $destinations }}
+{{- end }}
+{{- if eq $enabledDestinations 0 }}
+{{- fail "proxyConfig needs at least one enabled forward destination (forwardS3Destinations, forwardHttpDestinations or forwardFileDestinations): Stroom-Proxy won't start without one" }}
+{{- end }}
+
+{{- $config := dict "server" $server "logging" $logging "proxyConfig" $proxyConfig }}
+{{- if .Values.jerseyClients }}
+{{- $_ := set $config "jerseyClients" .Values.jerseyClients }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "stroom-proxy.fullname" . }}
+  labels:
+    {{- include "stroom-proxy.labels" . | nindent 4 }}
+data:
+  config.yml: |
+    # Generated by the stroom-proxy Helm chart. Change it through the chart's values.
+    {{- toYaml $config | nindent 4 }}
+  s3-sync.sh: |
+    {{- .Files.Get "files/s3-sync.sh" | nindent 4 }}

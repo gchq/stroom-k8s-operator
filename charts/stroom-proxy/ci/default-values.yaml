@@ -1,0 +1,8 @@
+# The chart's defaults plus the one thing it requires: a forward destination.
+# A file destination on the data volume, so the proxy boots in the CI boot
+# test without any AWS access.
+colour: blue
+proxyConfig:
+  forwardFileDestinations:
+    - name: local
+      path: /stroom-proxy/volume/forward

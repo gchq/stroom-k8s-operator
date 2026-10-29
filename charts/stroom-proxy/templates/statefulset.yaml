@@ -1,0 +1,305 @@
+{{- $fullname := include "stroom-proxy.fullname" . }}
+{{- $colour := include "stroom-proxy.colour" . }}
+{{- if and .Values.dfkSync.enabled (not .Values.dfkSync.bucket) }}
+{{- fail "dfkSync.bucket is required when dfkSync.enabled is true" }}
+{{- end }}
+{{- if not (has .Values.podAntiAffinity (list "required" "preferred" "none")) }}
+{{- fail "podAntiAffinity must be required, preferred or none" }}
+{{- end }}
+{{- $nodeSelector := .Values.nodeSelector | default dict | deepCopy }}
+{{- if .Values.colourNodeSelector }}
+{{- $_ := set $nodeSelector "stroom-proxy/colour" $colour }}
+{{- end }}
+{{- $antiAffinityTerm := dict "topologyKey" "kubernetes.io/hostname" "labelSelector" (dict "matchLabels" (include "stroom-proxy.selectorLabels" . | fromYaml)) }}
+{{- $affinity := .Values.affinity | default dict | deepCopy }}
+{{- if eq .Values.podAntiAffinity "required" }}
+{{- $_ := set $affinity "podAntiAffinity" (dict "requiredDuringSchedulingIgnoredDuringExecution" (list $antiAffinityTerm)) }}
+{{- else if eq .Values.podAntiAffinity "preferred" }}
+{{- $_ := set $affinity "podAntiAffinity" (dict "preferredDuringSchedulingIgnoredDuringExecution" (list (dict "weight" 100 "podAffinityTerm" $antiAffinityTerm))) }}
+{{- end }}
+{{- $restricted := dict "allowPrivilegeEscalation" false "capabilities" (dict "drop" (list "ALL")) }}
+{{- $syncEnv := list
+      (dict "name" "DFK_BUCKET" "value" .Values.dfkSync.bucket)
+      (dict "name" "DFK_PREFIX" "value" .Values.dfkSync.prefix)
+      (dict "name" "DFK_DIR" "value" "/dfk")
+      (dict "name" "DFK_STAGING_DIR" "value" "/dfk-staging")
+      (dict "name" "DFK_SYNC_INTERVAL" "value" (toString .Values.dfkSync.intervalSeconds))
+      (dict "name" "HOME" "value" "/tmp") }}
+{{- $syncMounts := list
+      (dict "name" "config" "mountPath" "/scripts" "readOnly" true)
+      (dict "name" "dfk" "mountPath" "/dfk")
+      (dict "name" "dfk-staging" "mountPath" "/dfk-staging")
+      (dict "name" "tmp" "mountPath" "/tmp") }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "stroom-proxy.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  serviceName: {{ $fullname }}-headless
+  # Proxies are independent of each other, so start them all at once.
+  # Updates still roll one pod at a time.
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  persistentVolumeClaimRetentionPolicy:
+    whenScaled: {{ .Values.persistence.whenScaled }}
+    whenDeleted: {{ .Values.persistence.whenDeleted }}
+  selector:
+    matchLabels:
+      {{- include "stroom-proxy.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "stroom-proxy.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        # Roll the pods when the config changes.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "stroom-proxy.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      # Long enough for the preStop wait and Jetty's graceful shutdown.
+      terminationGracePeriodSeconds: {{ include "stroom-proxy.terminationGraceSeconds" . }}
+      # Runs as the image's proxy user (uid 1000). The image's entrypoint only
+      # chowns and switches user when started as root, so that is skipped.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        # Volumes can hold many files: only fix ownership if the root is wrong.
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with $nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.zoneSpread }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              {{- include "stroom-proxy.selectorLabels" . | nindent 14 }}
+      {{- end }}
+      initContainers:
+        # Self-signed certificate for the HTTPS connectors (load balancer to
+        # pod hop). Kept if the pod restarts with the same emptyDir.
+        - name: tls
+          image: {{ include "stroom-proxy.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              if [ ! -f "$KEYSTORE" ]; then
+                keytool -genkeypair -noprompt -alias stroom-proxy \
+                  -keyalg RSA -keysize 2048 -validity "$VALIDITY_DAYS" \
+                  -dname "CN=$POD_NAME" \
+                  -keystore "$KEYSTORE" -storetype PKCS12 \
+                  -storepass "$KEYSTORE_PASSWORD" -keypass "$KEYSTORE_PASSWORD"
+              fi
+          env:
+            - name: KEYSTORE
+              value: {{ include "stroom-proxy.keystore" . }}
+            - name: KEYSTORE_PASSWORD
+              value: {{ .Values.tls.keystorePassword | quote }}
+            - name: VALIDITY_DAYS
+              value: {{ .Values.tls.validityDays | quote }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          securityContext:
+            {{- toYaml $restricted | nindent 12 }}
+          volumeMounts:
+            - name: tls
+              mountPath: {{ include "stroom-proxy.tlsDir" . }}
+            - name: tmp
+              mountPath: /tmp
+        {{- if .Values.dfkSync.enabled }}
+        # Fetch the data feed keys before the proxy starts.
+        - name: dfk-sync-init
+          image: {{ include "stroom-proxy.imageRef" (dict "image" .Values.dfkSync.image "defaultTag" .Values.dfkSync.image.tag) }}
+          imagePullPolicy: {{ .Values.dfkSync.image.pullPolicy }}
+          command: ["/bin/bash", "/scripts/s3-sync.sh", "--once"]
+          env:
+            {{- toYaml $syncEnv | nindent 12 }}
+          resources:
+            {{- toYaml .Values.dfkSync.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml (merge (dict "readOnlyRootFilesystem" true) $restricted) | nindent 12 }}
+          volumeMounts:
+            {{- toYaml $syncMounts | nindent 12 }}
+        # Native sidecar: starts before the proxy and stops after it.
+        - name: dfk-sync
+          image: {{ include "stroom-proxy.imageRef" (dict "image" .Values.dfkSync.image "defaultTag" .Values.dfkSync.image.tag) }}
+          imagePullPolicy: {{ .Values.dfkSync.image.pullPolicy }}
+          restartPolicy: Always
+          command: ["/bin/bash", "/scripts/s3-sync.sh"]
+          env:
+            {{- toYaml $syncEnv | nindent 12 }}
+          resources:
+            {{- toYaml .Values.dfkSync.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml (merge (dict "readOnlyRootFilesystem" true) $restricted) | nindent 12 }}
+          volumeMounts:
+            {{- toYaml $syncMounts | nindent 12 }}
+        {{- end }}
+      containers:
+        - name: stroom-proxy
+          image: {{ include "stroom-proxy.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: JAVA_OPTS
+              value: {{ .Values.javaOpts | quote }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: https
+              containerPort: {{ .Values.ports.https }}
+            - name: admin
+              containerPort: {{ .Values.ports.admin }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.healthCheckPath | quote }}
+              port: admin
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.healthCheckPath | quote }}
+              port: admin
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.healthCheckPath | quote }}
+              port: admin
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+          lifecycle:
+            # Keep serving while the load balancer deregisters this pod and
+            # lets its open connections finish; then Jetty shuts down
+            # gracefully on SIGTERM.
+            preStop:
+              sleep:
+                seconds: {{ include "stroom-proxy.preStopSeconds" . }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml $restricted | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: {{ include "stroom-proxy.home" . }}/config
+              readOnly: true
+            - name: data
+              mountPath: {{ include "stroom-proxy.volumeDir" . }}
+            - name: tls
+              mountPath: {{ include "stroom-proxy.tlsDir" . }}
+              readOnly: true
+            - name: dfk
+              mountPath: {{ include "stroom-proxy.dfkDir" . }}
+            - name: content
+              mountPath: {{ include "stroom-proxy.home" . }}/content
+            - name: tmp
+              mountPath: /tmp
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- if .Values.logSender.enabled }}
+        - name: log-sender
+          image: {{ include "stroom-proxy.imageRef" (dict "image" .Values.logSender.image "defaultTag" .Values.logSender.image.tag) }}
+          imagePullPolicy: {{ .Values.logSender.image.pullPolicy }}
+          env:
+            - name: DATAFEED_URL
+              value: https://localhost:{{ .Values.ports.local }}/datafeed
+            - name: LOGS_DIR
+              value: {{ include "stroom-proxy.volumeDir" . }}/logs
+            {{- with .Values.logSender.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.logSender.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml $restricted | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ include "stroom-proxy.volumeDir" . }}
+            - name: dfk
+              mountPath: {{ include "stroom-proxy.dfkDir" . }}
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+        {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $fullname }}
+            defaultMode: 0444
+        - name: tls
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: dfk
+          emptyDir:
+            sizeLimit: 64Mi
+        {{- if .Values.dfkSync.enabled }}
+        - name: dfk-staging
+          emptyDir:
+            sizeLimit: 64Mi
+        {{- end }}
+        - name: content
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "stroom-proxy.selectorLabels" . | nindent 10 }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.persistence.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}

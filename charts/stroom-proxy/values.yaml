@@ -1,0 +1,221 @@
+# Default values for the stroom-proxy chart.
+#
+# One release of this chart is one "colour" of a blue/green deployment: a
+# StatefulSet of proxies with their own volumes, pinned to that colour's nodes.
+# Two releases (blue and green) can run side by side in one namespace.
+
+# -- Colour of this release (e.g. blue, green). Suffixes resource names,
+# labels pods stroom-proxy/colour=<colour>, and pins pods to nodes with the
+# same label (see colourNodeSelector).
+colour: blue
+
+# -- Number of proxy pods. Each pod needs its own node (pod anti-affinity).
+replicas: 3
+
+image:
+  repository: gchq/stroom-proxy
+  # -- Defaults to the chart's appVersion.
+  tag: ""
+  # -- e.g. "sha256:…". When set, the image is pulled by digest and tag is
+  # only informative. Always set it in production (floating tags move).
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+# -- Replaces the default name "<name>-<colour>". Must differ between the
+# blue and green releases, or their resources clash.
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  # -- Defaults to the release's full name. EKS Pod Identity associations
+  # refer to it.
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+# -- Container resources for the proxy. Size the Java heap (javaOpts) to
+# about 50-60 % of the memory limit.
+resources: {}
+
+# -- JAVA_OPTS for the proxy. The default sizes the heap from the
+# container's memory limit.
+javaOpts: "-XX:InitialRAMPercentage=50 -XX:MaxRAMPercentage=60"
+
+# -- Extra environment variables for the proxy container, e.g. secrets that
+# proxyConfig refers to as ${NAME}.
+extraEnv: []
+# -- e.g. [{secretRef: {name: stroom-proxy-secrets}}]
+extraEnvFrom: []
+
+# --- Scheduling ---
+
+# -- Pin pods to nodes labelled stroom-proxy/colour=<colour>.
+colourNodeSelector: true
+# -- Extra node selector labels.
+nodeSelector:
+  workload: stroom-proxy
+# -- Tolerations. The default tolerates the proxy nodes' taint.
+tolerations:
+  - key: workload
+    operator: Equal
+    value: stroom-proxy
+    effect: NoSchedule
+# -- Spread pods evenly across zones (maxSkew 1).
+zoneSpread: true
+# -- One pod per node: required, preferred or none.
+podAntiAffinity: required
+# -- Extra affinity rules, merged with the anti-affinity above.
+affinity: {}
+priorityClassName: ""
+
+# --- Storage ---
+
+persistence:
+  # -- StorageClass for the data volumes. "" = the cluster default.
+  storageClassName: ""
+  size: 200Gi
+  # -- Keep volumes (and so unsent data) when replicas go down or the
+  # release is deleted. Delete them by hand once they are empty.
+  whenScaled: Retain
+  whenDeleted: Retain
+
+# --- Ports, health and draining ---
+
+ports:
+  # -- HTTPS from the load balancer. Uses X-Forwarded-For for sender addresses.
+  https: 8443
+  # -- HTTPS on localhost only, for in-pod callers such as the log-sender.
+  local: 8444
+  # -- Admin (health checks, metrics), plain HTTP.
+  admin: 8091
+
+# -- Health check path on the admin port, for probes and load balancer health
+# checks. It excludes (deny, one comma-separated list) the checks that call a
+# downstream Stroom or the identity provider, so pods stay ready while those
+# are unavailable: receipt still works and the proxy queues meanwhile. Every
+# name must be a registered check, or the endpoint answers 500; these are
+# registered in 7.14 whether or not a downstream is configured.
+healthCheckPath: /proxyAdmin/filteredhealthcheck?minimal=true&deny=stroom.proxy.app.handler.RemoteFeedStatusClient,stroom.proxy.app.ReceiveDataRuleSetClient,stroom.proxy.app.security.ProxyApiKeyCheckClient,stroom.proxy.app.handler.RemoteS3EventClient,stroom.security.common.impl.ExternalIdpConfigurationProvider
+
+drain:
+  # -- The load balancer target group's deregistration delay. The preStop
+  # hook waits this long (plus preStopExtraSeconds) so the pod keeps serving
+  # while the load balancer drains it.
+  deregistrationDelaySeconds: 120
+  preStopExtraSeconds: 15
+  # -- Time Jetty gives in-flight requests to finish after SIGTERM.
+  shutdownGracePeriodSeconds: 60
+
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+service:
+  annotations: {}
+
+# --- TLS between the load balancer and the pod ---
+
+tls:
+  # -- Each pod generates a self-signed certificate at start-up, in a
+  # memory-backed emptyDir. The load balancer doesn't verify target
+  # certificates; this only encrypts the hop inside the VPC. The password
+  # protects a throwaway file and is not a secret.
+  keystorePassword: stroom-proxy-ephemeral
+  validityDays: 3650
+
+# --- Data feed keys synced from S3 ---
+
+dfkSync:
+  # -- Sync DataFeedIdentities JSON files from S3 into the proxy's
+  # data feed identities directory: once before the proxy starts, then every
+  # intervalSeconds. The proxy reloads changed files without a restart. If
+  # the first sync fails, the pod doesn't start (rather than run without its
+  # keys); later failures keep the current files and are retried.
+  enabled: false
+  bucket: ""
+  # -- Key prefix of the files, e.g. "dfk/". Only *.json directly under it
+  # are used.
+  prefix: dfk/
+  intervalSeconds: 60
+  image:
+    repository: amazon/aws-cli
+    tag: "2.39.1"
+    digest: "sha256:3517c17b5f01637df3b6184a4280fbcc36e4ea38105954cade628ff17bb9a7b9"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+# --- Logging ---
+
+logging:
+  level: WARN
+  # -- Also write the receive and send audit logs and the request log to
+  # stdout (prefixed "receive", "send", "access"), so a cluster log collector
+  # picks them up. The rolled files are always written as well.
+  consoleAppenders: true
+  # -- Rolled log files (one per minute) to keep for each log.
+  archivedFileCount: 1440
+
+# --- Log sender (non-root stroom-log-sender), disabled until released ---
+
+logSender:
+  enabled: false
+  image:
+    repository: gchq/stroom-log-sender
+    tag: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+  # -- Environment for the log-sender. It posts to the pod's own proxy at
+  # https://localhost:<ports.local>/datafeed (DATAFEED_URL is set for it).
+  env: []
+  resources: {}
+
+# --- Stroom-Proxy configuration ---
+
+# -- The proxyConfig section of the proxy's config.yml, in the proxy's own
+# keys (see the 7.14 configuration reference). Maps are merged with these
+# defaults; lists replace them. The chart sets these itself and ignores any
+# value given here: path.home, path.data, path.temp, contentDir,
+# receive.dataFeedIdentitiesDir and dirScanner.enabled. Values may refer to
+# environment variables as ${NAME} (see extraEnv / extraEnvFrom).
+proxyConfig:
+  # Behind the ALB: the DN of a certificate the ALB has verified arrives in
+  # this header (section 5.2 of the design).
+  receive:
+    authenticationRequired: true
+    enabledAuthenticationTypes:
+      - CERTIFICATE
+      - TOKEN
+      - DATA_FEED_KEY
+    receiptCheckMode: RECEIVE_ALL
+    x509CertificateDnHeader: X-Stroom-Mtls-Subject
+    x509CertificateDnFormat: LDAP
+  downstreamHost:
+    enabled: false
+  aggregator:
+    enabled: true
+    aggregationFrequency: PT10M
+    maxItemsPerAggregate: 1000
+    maxUncompressedByteSize: 1.0G
+  # Default: no destinations. Set forwardS3Destinations (or
+  # forwardHttpDestinations / forwardFileDestinations).
+  forwardHttpDestinations: []
+  forwardFileDestinations: []
+  forwardS3Destinations: []
+  sqsConnectors: []
+
+# -- Optional jerseyClients section (REST clients for a downstream Stroom).
+jerseyClients: {}
+
+# --- Extras ---
+
+extraVolumes: []
+extraVolumeMounts: []

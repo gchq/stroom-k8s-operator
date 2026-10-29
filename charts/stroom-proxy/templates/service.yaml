@@ -1,0 +1,40 @@
+# The load balancer reaches the pods through a TargetGroupBinding that refers
+# to this Service (port "https"); there is no LoadBalancer Service or Ingress.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "stroom-proxy.fullname" . }}
+  labels:
+    {{- include "stroom-proxy.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "stroom-proxy.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: https
+      port: {{ .Values.ports.https }}
+      targetPort: https
+    - name: admin
+      port: {{ .Values.ports.admin }}
+      targetPort: admin
+---
+# Governing Service for the StatefulSet's pod DNS names.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "stroom-proxy.fullname" . }}-headless
+  labels:
+    {{- include "stroom-proxy.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "stroom-proxy.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: https
+      port: {{ .Values.ports.https }}
+      targetPort: https

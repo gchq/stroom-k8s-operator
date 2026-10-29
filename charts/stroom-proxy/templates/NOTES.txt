@@ -1,0 +1,17 @@
+Stroom-Proxy, colour {{ include "stroom-proxy.colour" . }}: {{ .Values.replicas }} pod(s) in StatefulSet {{ include "stroom-proxy.fullname" . }}.
+
+Image: {{ include "stroom-proxy.image" . }}
+{{- if not .Values.image.digest }}
+WARNING: the image is pulled by tag, which can move. Set image.digest.
+{{- end }}
+
+Senders reach the pods through the load balancer, which needs a
+TargetGroupBinding for Service {{ include "stroom-proxy.fullname" . }}, port https ({{ .Values.ports.https }}).
+Health check: HTTP {{ .Values.ports.admin }} {{ .Values.healthCheckPath }}
+
+Check the pods:
+  kubectl -n {{ .Release.Namespace }} get pods -l stroom-proxy/colour={{ include "stroom-proxy.colour" . }} -o wide
+
+Data volumes are kept when pods or the release are removed (whenScaled /
+whenDeleted: {{ .Values.persistence.whenScaled }} / {{ .Values.persistence.whenDeleted }}). Delete a PVC only once its
+proxy has forwarded everything.
