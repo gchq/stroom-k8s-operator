@@ -572,6 +572,30 @@ Open items:
 * ~~The ALB replaces a client-supplied subject header on the mTLS listener (5.3)~~: confirmed in dev (F20).
 * To confirm in testing: whether the NLB preserves client IPs to its ALB target (5.4). The proxy only sees the ALB's address, so this needs ALB access logs or VPC flow logs.
 
+### 15.1 Dev test results (2026-10-29)
+
+First deployment of all three stacks with `envs/dev`: eu-west-2, 3 AZs, `stroom-proxy-blue` with 3 replicas of `v7.14-beta.8`, internet-facing NLBs limited to the tester's address, a server certificate from a test CA imported into ACM (`acm_imported`), and a throwaway client CA. Problems found on the way are F20–F26.
+
+| Test | Result |
+|---|---|
+| Nodes | 2 system nodes; 1 proxy node per AZ, labelled `stroom-proxy/colour=blue` and tainted `workload=stroom-proxy:NoSchedule`; Kubernetes 1.37.1. |
+| Platform | LB controller (2 replicas), External Secrets, CloudWatch agent and Fluent Bit on all 5 nodes; `gp3` the default StorageClass. |
+| Proxy pods | 3 Ready, one per AZ and node, readiness gates satisfied; proxy ids `stroom-proxy-dev-stroom-proxy-blue-<n>`; config validation 0 errors. |
+| mTLS, valid client certificate | 200; the receive log records `X-Stroom-Mtls-Subject=CN=test-sender,OU=dev,O=Stroom Test` (with the header in `metaKeys`, F21). |
+| mTLS, no certificate / certificate from another CA | TLS handshake refused. |
+| mTLS, valid certificate plus forged `X-Stroom-Mtls-Subject` | 200 with the certificate's DN; the forged value never reached the proxy (F20). |
+| Plain, no credentials / bogus bearer token | 401. |
+| Plain, forged `X-Stroom-Mtls-Subject` or `X-SSL-CLIENT-S-DN` (F14) | 403 from the ALB. |
+| Plain, forged `X-Amzn-Mtls-Clientcert-Subject` | 401: the ALB strips the header, so the proxy sees no identity (F20). |
+| Data feed key | `ARGON2` key: 200 on every pod once synced; wrong `AccountId`: 401; file deleted from S3: 401 on every pod about 55 s later. `BCRYPT_2A` keys never work (F25); failed lookups are cached for 5 minutes (F26). |
+| Data bucket | Objects at `<yyyy>/<mm>/<dd>/<feed>/<uuid>.zip` about 10 minutes after receipt (no `Type` header, so no type level, F24); `COMPLIANCE` retention 1 day; KMS encrypted; an admin `DeleteObject` on a version refused ("protected by object lock"); an SQS message per object. |
+| NetworkPolicy | From pods in `default` and `stroom-proxy`, the proxy pod's 8443 and 8091 time out; a control request from the same pod reaches the Kubernetes API. |
+| Draining | `stroom-proxy-blue-1` deleted while sending 2 mTLS requests a second for 6 minutes: 616 of 616 returned 200, no resets. The replacement pod reattached its volume on the same node. |
+| Drained rolling update | 3 pods in 12 m 53 s for a config change (F24). |
+| Logs | Proxy logs, including `receive` lines, reach `/aws/containerinsights/stroom-proxy-dev/application`. |
+
+Not yet tested: blue/green (section 9.2), sender addresses at the ALB (5.4), PrivateLink, tokens (no IdP in dev), the log-sender.
+
 ## 16. Implementation phases
 
 1. `10-infra`: VPC with public, lb and private subnets, EKS, system node group, add-ons, per-colour proxy node groups (one per AZ per colour). Done when `kubectl get nodes` shows a proxy node in each AZ for the colour, and the system pods are running.
