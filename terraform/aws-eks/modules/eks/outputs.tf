@@ -66,3 +66,26 @@ output "system_node_label" {
   description = "Label (key and value) on system nodes, for cluster services."
   value       = local.system_node_label
 }
+
+output "stroom_node_label" {
+  description = "Label (key and value) on all Stroom nodes."
+  value       = local.stroom_node_label
+}
+
+output "stroom_node_sets" {
+  description = "Stroom node sets: for each, the label that selects its nodes, its node count, instance types and node groups. 40-stroom pins each Stroom node set's pods to its nodes."
+  value = {
+    for set_name, set in var.stroom_node_sets : set_name => {
+      node_label         = { key = local.node_set_label_key, value = set_name }
+      node_count         = set.node_count
+      instance_types     = set.instance_types
+      kubernetes_version = set.kubernetes_version
+      node_groups        = sort([for k, g in local.stroom_node_groups : k if g.set_name == set_name])
+    }
+  }
+}
+
+output "stroom_node_taint" {
+  description = "Taint on Stroom nodes. Stroom pods must tolerate it."
+  value       = { key = local.stroom_node_label.key, value = local.stroom_node_label.value, effect = "NoSchedule" }
+}

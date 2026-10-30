@@ -23,3 +23,16 @@ log_kms_key_arn          = null
 # --- External Secrets Operator ---
 external_secrets_chart_version = "2.14.0"
 secrets_name_prefix            = null # null = "stroom-proxy/<name>/"
+
+# --- Stroom (installed only when 10-infra has stroom_node_sets) ---
+cert_manager_chart_version   = "v1.21.3"
+trust_manager_chart_version  = "v0.26.0"
+metrics_server_chart_version = "3.14.0"
+# The operator's charts and image. {} = this repository's charts and the
+# gchq/stroom-k8s-operator image of the chart's appVersion.
+stroom_operator = {
+  # chart_repository = "oci://ghcr.io/gchq/helm-charts"
+  # chart_version    = "2.1.0"
+  # image_repository = "123456789012.dkr.ecr.eu-west-2.amazonaws.com/stroom-k8s-operator"
+  # image_tag        = "stroom-eks-abc1234"
+}

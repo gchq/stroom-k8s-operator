@@ -1,0 +1,54 @@
+# Signs only the CA certificate below
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ .Values.name }}-selfsigned
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Values.name }}
+  namespace: {{ .Values.caNamespace }}
+spec:
+  isCA: true
+  commonName: Stroom internal CA
+  secretName: {{ .Values.name }}
+  duration: {{ .Values.duration }}
+  renewBefore: {{ .Values.renewBefore }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: {{ .Values.name }}-selfsigned
+---
+# Issues the certificates Stroom serves on 8443
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ .Values.name }}
+spec:
+  ca:
+    secretName: {{ .Values.name }}
+---
+# Publishes the CA certificate, as the ConfigMap <name> (key ca.crt), to every labelled namespace: Stroom's, so
+# its nodes trust each other, and the proxy's, so it trusts Stroom
+apiVersion: trust.cert-manager.io/v1alpha1
+kind: Bundle
+metadata:
+  name: {{ .Values.name }}
+spec:
+  sources:
+    - secret:
+        name: {{ .Values.name }}
+        key: ca.crt
+  target:
+    configMap:
+      key: ca.crt
+    namespaceSelector:
+      matchLabels:
+        {{ .Values.namespaceLabel.key }}: {{ .Values.namespaceLabel.value | quote }}

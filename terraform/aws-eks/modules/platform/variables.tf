@@ -111,6 +111,69 @@ variable "secrets_name_prefix" {
   }
 }
 
+# --- Stroom (only with Stroom node sets) ---
+
+variable "stroom_enabled" {
+  description = "Install what Stroom needs: cert-manager, trust-manager and the in-cluster CA, metrics-server, and the Stroom operator. True when the cluster has Stroom node sets."
+  type        = bool
+  default     = false
+}
+
+variable "cert_manager_chart_version" {
+  description = "Version of the cert-manager Helm chart (jetstack)."
+  type        = string
+  default     = "v1.21.3"
+}
+
+variable "trust_manager_chart_version" {
+  description = "Version of the trust-manager Helm chart (jetstack)."
+  type        = string
+  default     = "v0.26.0"
+}
+
+variable "metrics_server_chart_version" {
+  description = "Version of the metrics-server Helm chart."
+  type        = string
+  default     = "3.14.0"
+}
+
+variable "internal_ca_name" {
+  description = "Name of the in-cluster CA: its ClusterIssuer, and the ConfigMap holding its certificate (key ca.crt) in each labelled namespace."
+  type        = string
+  default     = "stroom-internal-ca"
+}
+
+variable "internal_ca_namespace_label" {
+  description = "Label that makes trust-manager publish the CA certificate into a namespace."
+  type        = object({ key = string, value = string })
+  default     = { key = "stroom.gchq.github.io/internal-ca", value = "true" }
+}
+
+variable "stroom_operator" {
+  description = <<-EOT
+    Where the Stroom operator comes from.
+
+    chart_repository : Helm repository of the stroom-operator and
+                       stroom-operator-crds charts, e.g.
+                       "oci://ghcr.io/gchq/helm-charts". null = this
+                       repository's charts directory, which has changes not
+                       yet released (node name prefix, directories, database
+                       TLS, API keys with an external IdP).
+    chart_version    : chart version; null = the latest (repository) or the
+                       local chart.
+    image_repository : full image repository, e.g. an ECR repository holding a
+                       build of this branch. null = gchq/stroom-k8s-operator.
+    image_tag        : image tag. null = the chart's appVersion.
+  EOT
+  type = object({
+    chart_repository = optional(string)
+    chart_version    = optional(string)
+    image_repository = optional(string)
+    image_tag        = optional(string)
+  })
+  default = {}
+}
+
 variable "tags" {
   description = "Tags added to every AWS resource."
   type        = map(string)

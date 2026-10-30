@@ -42,6 +42,7 @@ module "eks" {
   system_node_count         = var.system_node_count
 
   proxy_node_colours = var.proxy_node_colours
+  stroom_node_sets   = var.stroom_node_sets
 }
 
 check "proxy_nodes_on_demand" {

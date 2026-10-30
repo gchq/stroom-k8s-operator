@@ -69,9 +69,30 @@ a cluster that already exists.
     explicit and its AMI release is fixed (the latest when the colour is
     created, unless `ami_release_version` pins one). Node upgrades come from a
     new colour, not from in-place rolling updates.
+
+    `proxy_node_colours = {}` gives a cluster without Stroom-Proxy.
+  * Stroom node groups, only when `stroom_node_sets` is set (for the
+    `40-stroom` stack, design
+    [`stroom-eks-terraform-design.md`](../../design/stroom-eks-terraform-design.md)
+    section 11.2). Each Stroom node set's `node_count` nodes are spread over the
+    AZs in order, with a node group for each AZ that gets any
+    (`stroom-<set>-az<n>`): 2 nodes in 3 AZs go to az1 and az2. Labelled
+    `workload=stroom` and `stroom/node-set=<set>`, tainted
+    `workload=stroom:NoSchedule`, on-demand only. Instance types must be x86_64
+    with instance-store NVMe (`r6id`, `m6id`, `c6id`, `i4i`, ...): `nodeadm`
+    builds a RAID0 array from the NVMe disks for kubelet and containerd, so
+    Stroom's `emptyDir` directories land on NVMe. As for proxy colours, the
+    Kubernetes version is explicit and the AMI fixed at creation; changing
+    `ami_release_version` replaces a group's nodes one at a time, and each
+    Stroom pod moves to the new node in its AZ with its EBS volume. Stroom nodes
+    own their index shards, so only ever raise `node_count`.
 * EKS add-ons: `vpc-cni` (network policy enforcement on), `coredns`,
   `kube-proxy`, `eks-pod-identity-agent`, and `aws-ebs-csi-driver` with a Pod
-  Identity role and its node DaemonSet tolerating the proxy taint.
+  Identity role and its node DaemonSet tolerating the proxy taint. With Stroom
+  node sets, also `aws-efs-csi-driver` (Stroom's shared stream volume) with a
+  Pod Identity role; its node DaemonSet tolerates all taints by default.
+
+At least one of `proxy_node_colours` and `stroom_node_sets` must be set.
 
 ## What `20-platform` creates
 
@@ -101,6 +122,29 @@ Everything runs on the system nodes.
 
 The controllers are given the region and VPC ID explicitly, because the IMDS
 hop limit of 1 stops pods reading them from instance metadata.
+
+Only when `10-infra` has Stroom node sets, for `40-stroom`:
+
+* **cert-manager** (chart v1.21.3, with its CRDs, two replicas) and
+  **trust-manager** (chart v0.26.0).
+* **An in-cluster CA**, from the local chart
+  `modules/platform/charts/stroom-internal-ca`: a self-signed root that
+  cert-manager keeps in its namespace, the `stroom-internal-ca` ClusterIssuer
+  that signs with it, and a trust-manager `Bundle` that writes the CA
+  certificate as the ConfigMap `stroom-internal-ca` (key `ca.crt`) into every
+  namespace labelled `stroom.gchq.github.io/internal-ca=true`. Stroom's nodes
+  serve HTTPS with certificates from it, and Stroom and the proxy trust it. A
+  chart, because Terraform can't plan custom resources whose CRDs it installs
+  in the same apply.
+* **metrics-server** (chart 3.14.0), for the Stroom operator's task
+  autoscaler.
+* **The Stroom operator** and its CRDs, as two Helm releases. By default from
+  this repository's `charts/` directory, as the operator changes the Stroom
+  design needs aren't released yet; `stroom_operator` sets a chart repository
+  and version instead, and an image (for example a build of this branch in
+  ECR).
+
+A proxy-only cluster gets none of these.
 
 ## What `30-stroom-proxy` creates
 
@@ -254,7 +298,8 @@ curl -H "Authorization: Bearer <token>" https://<hostname>/datafeed -H 'Feed: TE
 | `admin_principal_arns` | `[]` | Extra cluster admins. Don't include the identity running Terraform: it is already an admin, and EKS rejects a second access entry for it. |
 | `api_allowed_cidrs` | `[]` | Empty = private API endpoint only. |
 | `system_node_instance_type`, `system_node_count` | `t3.medium`, `2` | |
-| `proxy_node_colours` | `{ blue = { instance_types = ["m6i.xlarge"], kubernetes_version = "1.37" } }` | One or two colours. Per colour: `instance_types` (x86_64 only), `capacity_type` (`ON_DEMAND`, or `SPOT` with a warning), `nodes_per_az` (default 1), `kubernetes_version` (the cluster's or up to three minor versions older), `ami_release_version` (default: latest at creation, then fixed), `root_volume_gb` (default 50). |
+| `proxy_node_colours` | `{ blue = { instance_types = ["m6i.xlarge"], kubernetes_version = "1.37" } }` | None (no proxy), one, or two colours. Per colour: `instance_types` (x86_64 only), `capacity_type` (`ON_DEMAND`, or `SPOT` with a warning), `nodes_per_az` (default 1), `kubernetes_version` (the cluster's or up to three minor versions older), `ami_release_version` (default: latest at creation, then fixed), `root_volume_gb` (default 50). |
+| `stroom_node_sets` | `{}` | Stroom node groups, keyed by Stroom node set (`proc`, `ui`). Per set: `instance_types` (x86_64 with instance-store NVMe), `node_count` (spread over the AZs; only raise it), `kubernetes_version`, `ami_release_version`, `root_volume_gb` (default 50). |
 
 See `stacks/10-infra/variables.tf` for the full list.
 
@@ -270,6 +315,8 @@ See `stacks/10-infra/variables.tf` for the full list.
 | `log_retention_days` | `90` | Container Insights log groups. |
 | `external_secrets_chart_version` | `2.14.0` | |
 | `secrets_name_prefix` | `stroom-proxy/<name>/` | Secrets Manager prefix the operator may read. |
+| `cert_manager_chart_version`, `trust_manager_chart_version`, `metrics_server_chart_version` | `v1.21.3`, `v0.26.0`, `3.14.0` | Installed only with Stroom node sets. |
+| `stroom_operator` | this repository's charts, `gchq/stroom-k8s-operator` | `{ chart_repository, chart_version, image_repository, image_tag }`. Installed only with Stroom node sets. |
 
 See `stacks/20-platform/variables.tf` for the full list.
 
@@ -295,7 +342,7 @@ See `stacks/30-stroom-proxy/variables.tf` and `modules/stroom-proxy/variables.tf
 
 ## Tests
 
-Both stacks have plan-only tests that use mocked providers, so they need no
+The stacks have plan-only tests that use mocked providers, so they need no
 credentials or cluster:
 
 ```sh
@@ -303,6 +350,11 @@ cd stacks/10-infra    # or stacks/20-platform, stacks/30-stroom-proxy
 terraform init -backend=false
 terraform test
 ```
+
+If the stack's `.terraform` was initialised with the real backend, run the
+tests with another data directory (`TF_DATA_DIR=/tmp/tf-test terraform init
+-backend=false && TF_DATA_DIR=/tmp/tf-test terraform test`): `init
+-backend=false` still reads the saved backend and needs credentials.
 
 `10-infra`'s tests check that the default, /20-VPC, blue/green and existing-VPC
 configurations plan (including the lb subnet ranges), and that invalid inputs
@@ -318,12 +370,23 @@ are rejected:
 
 Spot capacity gives a warning.
 
+Its Stroom tests (`tests/stroom.tftest.hcl`) plan the three deployment shapes
+(proxy only, Stroom only, both), check how a node set's nodes are spread over
+the AZs and that the EFS CSI driver comes only with Stroom, and reject a
+cluster with neither, instance types without instance-store NVMe, Graviton
+types, bad node set names, zero nodes and node versions newer than the
+cluster.
+
 `20-platform`'s tests check the controllers' Helm values (region and VPC ID
 set, system node selector, ingress class and Service mutator off, pod webhook
 failing closed), the gp3 parameters, the log groups' retention and the Pod
 Identity associations. They also check that a throughput above IOPS / 4, a
 retention value CloudWatch doesn't support, a secrets prefix without a
-trailing `/` and a CloudWatch add-on older than 1.7.0 are rejected.
+trailing `/` and a CloudWatch add-on older than 1.7.0 are rejected. Its Stroom
+tests check that a proxy-only cluster (including a `10-infra` state from
+before Stroom) gets none of Stroom's components, and a cluster with Stroom
+node sets gets them all, on the system nodes, with the operator from this
+repository's charts or from a given repository and image.
 
 `30-stroom-proxy`'s tests check the stack's wiring, and, in the module: the
 rendered proxy config and Helm values (types preserved, unique S3 keys, a

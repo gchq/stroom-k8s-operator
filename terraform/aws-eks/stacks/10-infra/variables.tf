@@ -138,4 +138,28 @@ variable "proxy_node_colours" {
       kubernetes_version = "1.37"
     }
   }
+
+  validation {
+    condition     = length(var.proxy_node_colours) > 0 || length(var.stroom_node_sets) > 0
+    error_message = "Set proxy_node_colours, stroom_node_sets or both: a cluster with neither runs nothing."
+  }
+}
+
+# --- Stroom node groups ---
+
+variable "stroom_node_sets" {
+  description = <<-EOT
+    Stroom node groups by Stroom node set (e.g. proc, ui), for the 40-stroom
+    stack. Empty (the default) for a cluster with only Stroom-Proxy. The keys
+    must match the node set names in 40-stroom, and node_count its counts. See
+    modules/eks/variables.tf for the fields.
+  EOT
+  type = map(object({
+    instance_types      = list(string)
+    node_count          = number
+    kubernetes_version  = string
+    ami_release_version = optional(string)
+    root_volume_gb      = optional(number, 50)
+  }))
+  default = {}
 }

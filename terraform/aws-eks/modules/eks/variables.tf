@@ -113,8 +113,8 @@ variable "proxy_node_colours" {
   }))
 
   validation {
-    condition     = length(var.proxy_node_colours) >= 1 && length(var.proxy_node_colours) <= 2
-    error_message = "proxy_node_colours must have one colour, or two during a blue/green upgrade."
+    condition     = length(var.proxy_node_colours) <= 2
+    error_message = "proxy_node_colours must have one colour, two during a blue/green upgrade, or none for a cluster without Stroom-Proxy."
   }
 
   validation {
@@ -171,6 +171,100 @@ variable "proxy_node_colours" {
       c.ami_release_version == null ? true : startswith(c.ami_release_version, "${c.kubernetes_version}.")
     ])
     error_message = "ami_release_version must belong to the colour's kubernetes_version (e.g. \"1.37.4-20261020\" for 1.37)."
+  }
+}
+
+# --- Stroom node groups: Stroom pods only (tainted), one set per Stroom node set ---
+
+variable "stroom_node_sets" {
+  description = <<-EOT
+    Stroom node groups, keyed by the Stroom node set they run (e.g. "proc", "ui").
+    Each set's nodes are spread over the AZs, one managed node group per AZ that
+    has any (stroom-<set>-az<n>), so a pod always has a node in its EBS volume's
+    AZ. Nodes are labelled stroom/node-set=<set> and tainted workload=stroom.
+    Empty for a cluster without Stroom.
+
+    instance_types      : x86_64 types with instance-store NVMe (r6id, m6id, c6id,
+                          i4i, ...): the NVMe disks become a RAID0 array for
+                          kubelet and containerd, which holds Stroom's emptyDir
+                          directories (reference data, search results, temp).
+    node_count          : nodes in the set, spread over the AZs in order (2 nodes in
+                          3 AZs: az1 and az2). Stroom nodes own their index shards,
+                          so only raise it, together with the node set's count.
+    kubernetes_version  : kubelet minor version, e.g. "1.37". Explicit, so a control
+                          plane upgrade doesn't roll Stroom nodes.
+    ami_release_version : EKS AMI release. null = the latest when the node group is
+                          created, then left unchanged. Changing it replaces the
+                          nodes one AZ group at a time (drained, PDB-limited).
+    root_volume_gb      : root volume size. Container images and emptyDirs are on NVMe.
+  EOT
+  type = map(object({
+    instance_types      = list(string)
+    node_count          = number
+    kubernetes_version  = string
+    ami_release_version = optional(string)
+    root_volume_gb      = optional(number, 50)
+  }))
+  default = {}
+
+  validation {
+    condition     = alltrue([for s in keys(var.stroom_node_sets) : can(regex("^[a-z][a-z0-9]{0,9}$", s))])
+    error_message = "stroom_node_sets keys must be 1-10 lower-case letters or digits, starting with a letter (e.g. proc, ui), as the Stroom node set names."
+  }
+
+  validation {
+    condition     = alltrue([for s in values(var.stroom_node_sets) : length(s.instance_types) > 0])
+    error_message = "Each Stroom node set needs at least one instance type."
+  }
+
+  validation {
+    # As for the proxy: no Graviton until the gchq/stroom image is published for arm64.
+    condition = alltrue(flatten([
+      for s in values(var.stroom_node_sets) : [
+        for t in s.instance_types : !can(regex("^(a1|[a-z]+[0-9]+[a-z]*g[a-z]*)\\.", lower(t)))
+      ]
+    ]))
+    error_message = "stroom_node_sets contains a Graviton (arm64) instance type. Use an x86_64 type with instance-store NVMe, such as r6id, m6id or i4i."
+  }
+
+  validation {
+    # Instance-store families have a "d" after the generation number (r6id, m5dn,
+    # x2idn), or are storage-optimised (i3, i3en, i4i, im4gn is Graviton).
+    condition = alltrue(flatten([
+      for s in values(var.stroom_node_sets) : [
+        for t in s.instance_types : can(regex("^([a-z]+[0-9]+[a-z]*d[a-z]*|i[0-9]+[a-z]*)\\.", lower(t)))
+      ]
+    ]))
+    error_message = "Stroom node instance types need instance-store NVMe (a \"d\" family such as r6id, m6id or c6id, or i4i), which holds Stroom's reference data, search results and temp files."
+  }
+
+  validation {
+    condition     = alltrue([for s in values(var.stroom_node_sets) : s.node_count >= 1 && floor(s.node_count) == s.node_count])
+    error_message = "node_count must be a whole number, at least 1."
+  }
+
+  validation {
+    condition     = alltrue([for s in values(var.stroom_node_sets) : s.root_volume_gb >= 20])
+    error_message = "root_volume_gb must be at least 20."
+  }
+
+  validation {
+    condition = alltrue([
+      for s in values(var.stroom_node_sets) :
+      can(regex("^1\\.[0-9]+$", s.kubernetes_version)) ? (
+        tonumber(split(".", var.kubernetes_version)[1]) - tonumber(split(".", s.kubernetes_version)[1]) >= 0 &&
+        tonumber(split(".", var.kubernetes_version)[1]) - tonumber(split(".", s.kubernetes_version)[1]) <= 3
+      ) : false
+    ])
+    error_message = "Each Stroom node set's kubernetes_version must look like \"1.37\" and be the cluster's version or up to three minor versions older."
+  }
+
+  validation {
+    condition = alltrue([
+      for s in values(var.stroom_node_sets) :
+      s.ami_release_version == null ? true : startswith(s.ami_release_version, "${s.kubernetes_version}.")
+    ])
+    error_message = "ami_release_version must belong to the node set's kubernetes_version (e.g. \"1.37.4-20261020\" for 1.37)."
   }
 }
 

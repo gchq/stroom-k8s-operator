@@ -1,0 +1,9 @@
+apiVersion: v2
+name: stroom-internal-ca
+description: >-
+  The in-cluster CA for TLS between Stroom, its nodes and Stroom-Proxy: a self-signed root held by cert-manager,
+  a ClusterIssuer that signs with it, and a trust-manager Bundle that publishes its certificate to labelled
+  namespaces. Installed by Terraform after cert-manager and trust-manager, as their custom resources can't be
+  planned before their CRDs exist.
+type: application
+version: 1.0.0

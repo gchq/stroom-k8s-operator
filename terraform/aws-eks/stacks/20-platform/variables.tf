@@ -74,3 +74,34 @@ variable "secrets_name_prefix" {
   type        = string
   default     = null
 }
+
+# --- Stroom (installed only when 10-infra has Stroom node sets) ---
+
+variable "cert_manager_chart_version" {
+  description = "Version of the cert-manager Helm chart."
+  type        = string
+  default     = "v1.21.3"
+}
+
+variable "trust_manager_chart_version" {
+  description = "Version of the trust-manager Helm chart."
+  type        = string
+  default     = "v0.26.0"
+}
+
+variable "metrics_server_chart_version" {
+  description = "Version of the metrics-server Helm chart."
+  type        = string
+  default     = "3.14.0"
+}
+
+variable "stroom_operator" {
+  description = "Where the Stroom operator's charts and image come from. The defaults use this repository's charts and the gchq/stroom-k8s-operator image of the chart's appVersion. See modules/platform/variables.tf."
+  type = object({
+    chart_repository = optional(string)
+    chart_version    = optional(string)
+    image_repository = optional(string)
+    image_tag        = optional(string)
+  })
+  default = {}
+}

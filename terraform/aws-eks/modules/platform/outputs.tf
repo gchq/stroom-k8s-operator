@@ -27,3 +27,23 @@ output "container_insights_log_groups" {
   description = "Container Insights log group names, by type."
   value       = { for k, g in aws_cloudwatch_log_group.container_insights : k => g.name }
 }
+
+output "stroom_enabled" {
+  description = "Whether the Stroom components are installed."
+  value       = var.stroom_enabled
+}
+
+output "internal_ca" {
+  description = "The in-cluster CA, when Stroom is installed: the ClusterIssuer that signs workload certificates, and the ConfigMap (name and key) trust-manager writes its certificate to in every namespace with the label."
+  value = var.stroom_enabled ? {
+    cluster_issuer  = var.internal_ca_name
+    configmap_name  = var.internal_ca_name
+    configmap_key   = "ca.crt"
+    namespace_label = var.internal_ca_namespace_label
+  } : null
+}
+
+output "stroom_operator_namespace" {
+  description = "Namespace of the Stroom operator, when Stroom is installed."
+  value       = var.stroom_enabled ? local.stroom_operator_namespace : null
+}

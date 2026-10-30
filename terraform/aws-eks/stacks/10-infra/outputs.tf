@@ -1,4 +1,4 @@
-# Read by the 20-platform and 30-stroom-proxy stacks through
+# Read by the 20-platform, 30-stroom-proxy and 40-stroom stacks through
 # terraform_remote_state.
 
 output "aws_region" {
@@ -104,4 +104,19 @@ output "proxy_node_taint" {
 output "system_node_label" {
   description = "Label on system nodes (nodeSelector for cluster services)."
   value       = module.eks.system_node_label
+}
+
+output "stroom_node_label" {
+  description = "Label on all Stroom nodes."
+  value       = module.eks.stroom_node_label
+}
+
+output "stroom_node_sets" {
+  description = "Stroom node sets: node label, node count and node groups per set (nodeSelector for each Stroom node set's pods). Empty when the cluster has no Stroom."
+  value       = module.eks.stroom_node_sets
+}
+
+output "stroom_node_taint" {
+  description = "Taint on Stroom nodes (Stroom pods must tolerate it)."
+  value       = module.eks.stroom_node_taint
 }

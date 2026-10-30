@@ -1,0 +1,12 @@
+# Namespace cert-manager keeps the CA's key in. Must be trust-manager's trust namespace.
+caNamespace: cert-manager
+# Name of the CA ClusterIssuer that signs workload certificates, the CA Certificate, its Secret and the Bundle
+name: stroom-internal-ca
+# The CA certificate's lifetime and when cert-manager renews it. Workloads must trust the new CA before their
+# certificates are reissued from it.
+duration: 87600h   # 10 years
+renewBefore: 8760h # 1 year
+# The trust bundle is written as a ConfigMap (key ca.crt) into each namespace with this label
+namespaceLabel:
+  key: stroom.gchq.github.io/internal-ca
+  value: "true"

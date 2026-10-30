@@ -42,3 +42,22 @@ proxy_node_colours = {
   #   kubernetes_version = "1.37"
   # }
 }
+
+# --- Stroom node groups (only with the 40-stroom stack) ---
+# One entry per Stroom node set, with the same names and counts as 40-stroom.
+# x86_64 types with instance-store NVMe only. Stroom nodes own their index
+# shards, so only ever raise node_count. For a Stroom-only cluster, also set
+# proxy_node_colours = {}.
+stroom_node_sets = {
+  # proc = {
+  #   instance_types      = ["r6id.8xlarge"]
+  #   node_count          = 2 # spread over the AZs: az1, az2
+  #   kubernetes_version  = "1.37"
+  #   ami_release_version = null
+  # }
+  # ui = {
+  #   instance_types     = ["r6id.4xlarge"]
+  #   node_count         = 1
+  #   kubernetes_version = "1.37"
+  # }
+}

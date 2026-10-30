@@ -37,4 +37,12 @@ module "platform" {
 
   external_secrets_chart_version = var.external_secrets_chart_version
   secrets_name_prefix            = coalesce(var.secrets_name_prefix, "stroom-proxy/${local.infra.name}/")
+
+  # Stroom's components only when 10-infra has Stroom node groups. try() for a
+  # 10-infra state written before the output existed.
+  stroom_enabled               = length(try(local.infra.stroom_node_sets, {})) > 0
+  cert_manager_chart_version   = var.cert_manager_chart_version
+  trust_manager_chart_version  = var.trust_manager_chart_version
+  metrics_server_chart_version = var.metrics_server_chart_version
+  stroom_operator              = var.stroom_operator
 }
