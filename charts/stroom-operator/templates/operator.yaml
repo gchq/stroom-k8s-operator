@@ -156,7 +156,6 @@ rules:
   resources:
   - configmaps
   - persistentvolumeclaims
-  - secrets
   - serviceaccounts
   - services
   verbs:
@@ -176,6 +175,13 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - create
+  - get
 - apiGroups:
   - apps
   resources:
@@ -202,13 +208,6 @@ rules:
   - update
   - watch
 - apiGroups:
-  - events.k8s.io
-  resources:
-  - events
-  verbs:
-  - create
-  - patch
-- apiGroups:
   - metrics.k8s.io
   resources:
   - pods
@@ -219,19 +218,6 @@ rules:
   - networking.k8s.io
   resources:
   - ingresses
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - rbac.authorization.k8s.io
-  resources:
-  - rolebindings
-  - roles
   verbs:
   - create
   - delete
@@ -434,7 +420,7 @@ spec:
         - --health-probe-bind-address=:8081
         command:
         - /manager
-        image: {{ .Values.registry | default "gchq/stroom-k8s-operator" }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+        image: {{ include "stroom-operator.image" . }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         livenessProbe:
           httpGet:

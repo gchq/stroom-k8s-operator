@@ -2,11 +2,12 @@
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
-# Full image repository to pull the operator from (e.g. my-registry.example.com/gchq/stroom-k8s-operator).
-# Defaults to gchq/stroom-k8s-operator.
+# Full image repository to pull the operator from (e.g. my-registry.example.com/gchq/stroom-k8s-operator),
+# in place of image.repository.
 registry: ""
 
 image:
+  repository: gchq/stroom-k8s-operator
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
   tag: ""
