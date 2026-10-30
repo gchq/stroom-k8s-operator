@@ -1,7 +1,9 @@
 package v1
 
+// +kubebuilder:validation:XValidation:rule="!(has(self.serverRef) && (size(self.serverRef.name) > 0 || (has(self.serverRef.namespace) && size(self.serverRef.namespace) > 0)) && has(self.serverAddress) && has(self.serverAddress.tls))",message="serverAddress.tls applies to an external database only: it can't be set with serverRef"
 type DatabaseServerRef struct {
-	// If specified, point to an operator-managed DatabaseServer object
+	// If specified, point to an operator-managed DatabaseServer object. Its connection doesn't use serverAddress.tls,
+	// which can't be set with it.
 	// +optional
 	ServerRef ResourceRef `json:"serverRef,omitempty"`
 	// Alternatively, if the following parameters are provided, point directly to a DB by its TCP address.

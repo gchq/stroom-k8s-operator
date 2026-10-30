@@ -57,4 +57,43 @@ var _ = Describe("StroomCluster validation", func() {
 		cluster := newCluster(map[string]interface{}{"volumeClaimDeletePolicy": "DeleteAlways"}, map[string]interface{}{})
 		Expect(k8sClient.Create(context.Background(), cluster)).ToNot(Succeed())
 	})
+
+	Context("databaseServerRef", func() {
+		tls := map[string]interface{}{"mode": "VerifyIdentity"}
+		withDatabaseServerRef := func(dbRef map[string]interface{}) *unstructured.Unstructured {
+			cluster := newCluster(map[string]interface{}{}, map[string]interface{}{})
+			cluster.Object["spec"].(map[string]interface{})["databaseServerRef"] = dbRef
+			return cluster
+		}
+
+		It("should refuse serverAddress.tls with serverRef, which doesn't use it", func() {
+			cluster := withDatabaseServerRef(map[string]interface{}{
+				"serverRef":     map[string]interface{}{"name": "mysql"},
+				"serverAddress": map[string]interface{}{"tls": tls},
+			})
+			err := k8sClient.Create(context.Background(), cluster)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("serverAddress.tls applies to an external database only"))
+		})
+
+		It("should accept serverAddress.tls without serverRef, or with an empty one, as Go clients send", func() {
+			for _, dbRef := range []map[string]interface{}{
+				{"serverAddress": map[string]interface{}{"host": "mysql.example.com", "secretName": "db", "tls": tls}},
+				{"serverRef": map[string]interface{}{"name": ""}, "serverAddress": map[string]interface{}{"host": "mysql.example.com", "secretName": "db", "tls": tls}},
+			} {
+				cluster := withDatabaseServerRef(dbRef)
+				Expect(k8sClient.Create(context.Background(), cluster)).To(Succeed())
+				Expect(k8sClient.Delete(context.Background(), cluster)).To(Succeed())
+			}
+		})
+
+		It("should accept serverRef without serverAddress.tls", func() {
+			cluster := withDatabaseServerRef(map[string]interface{}{
+				"serverRef":     map[string]interface{}{"name": "mysql"},
+				"serverAddress": map[string]interface{}{},
+			})
+			Expect(k8sClient.Create(context.Background(), cluster)).To(Succeed())
+			Expect(k8sClient.Delete(context.Background(), cluster)).To(Succeed())
+		})
+	})
 })

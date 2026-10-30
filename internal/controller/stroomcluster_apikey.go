@@ -340,6 +340,9 @@ func (r *StroomClusterReconciler) reconcileApiKeyRbac(ctx context.Context, stroo
 	newRole := r.createApiKeyWriterRole(stroomCluster)
 	role := rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: newRole.Name, Namespace: newRole.Namespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, &role, func() error {
+		if err := r.checkControlled(stroomCluster, &role, "Role"); err != nil {
+			return err
+		}
 		role.Labels = newRole.Labels
 		role.OwnerReferences = newRole.OwnerReferences
 		role.Rules = newRole.Rules
@@ -351,6 +354,9 @@ func (r *StroomClusterReconciler) reconcileApiKeyRbac(ctx context.Context, stroo
 	newRoleBinding := r.createApiKeyWriterRoleBinding(stroomCluster)
 	roleBinding := rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: newRoleBinding.Name, Namespace: newRoleBinding.Namespace}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, &roleBinding, func() error {
+		if err := r.checkControlled(stroomCluster, &roleBinding, "RoleBinding"); err != nil {
+			return err
+		}
 		roleBinding.Labels = newRoleBinding.Labels
 		roleBinding.OwnerReferences = newRoleBinding.OwnerReferences
 		roleBinding.RoleRef = newRoleBinding.RoleRef

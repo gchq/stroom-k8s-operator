@@ -174,7 +174,7 @@ _Appears in:_ [DatabaseBackupSpec](#databasebackupspec), [StroomClusterSpec](#st
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `serverRef` _[ResourceRef](#resourceref)_ | If specified, point to an operator-managed DatabaseServer object |  | Optional |
+| `serverRef` _[ResourceRef](#resourceref)_ | If specified, point to an operator-managed DatabaseServer object. Its connection doesn't use serverAddress.tls,<br />which can't be set with it. |  | Optional |
 | `serverAddress` _[ServerAddress](#serveraddress)_ | Alternatively, if the following parameters are provided, point directly to a DB by its TCP address.<br />This allows external database instances to be used in place of an operator-managed one. |  |  |
 | `userName` _string_ | UserName is the name of the Stroom database user to use when connecting to the server.<br />A corresponding key should exist in the provided Secret referenced by SecretName. | `stroomuser` |  |
 
@@ -429,7 +429,7 @@ _Appears in:_ [StroomClusterSpec](#stroomclusterspec)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `name` _string_ | Name uniquely identifies the NodeSet within a StroomCluster. Should be a short name like "prod".<br />The NodeSet name determines the name of the Stroom node, which follows the format:<br />`stroom-<cluster name>-node-<nodeset name>-<pod ordinal>`, or `<nodeNamePrefix>-<nodeset name>-<pod ordinal>`<br />when the StroomCluster sets `nodeNamePrefix`.<br />For example, the first Stroom node in StroomCluster `dev`, NodeSet `data` will be named:<br />`stroom-dev-node-data-0`. |  | MaxLength: 30 |
+| `name` _string_ | Name uniquely identifies the NodeSet within a StroomCluster. Should be a short name like "prod".<br />The NodeSet name determines the name of the Stroom node, which follows the format:<br />`stroom-<cluster name>-node-<nodeset name>-<pod ordinal>`, or `<nodeNamePrefix>-<nodeset name>-<pod ordinal>`<br />when the StroomCluster sets `nodeNamePrefix`.<br />For example, the first Stroom node in StroomCluster `dev`, NodeSet `data` will be named:<br />`stroom-dev-node-data-0`.<br />It is a DNS label: lowercase letters, digits and hyphens. The StatefulSet name, `<nodeNamePrefix>-<nodeset name>`<br />or `stroom-<cluster name>-node-<nodeset name>`, can be at most 52 characters, so that its Pods' labels and the<br />NodeSet's `-http` Service name fit Kubernetes' 63-character limit. |  | MaxLength: 30<br />Pattern: `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$` |
 | `count` _integer_ | Number of replicas (discrete Stroom nodes) to deploy in the NodeSet |  | Minimum: 1 |
 | `role` _[NodeRole](#noderole)_ | Role of each node in the NodeSet. `Processing` nodes receive and process data, while `Frontend` nodes serve<br />the Stroom user interface and API.<br />If this property is omitted, nodes in the NodeSet will assume both Processing and Frontend roles. |  | Enum: [Processing Frontend] |
 | `managedJobs` _string array_ | Automatically enable the specified job(s) on node startup and disable them prior to node shutdown.<br />If omitted, nodes with the `Processing` role or no role enable and disable all jobs, while `Frontend` nodes<br />only manage the job `Reindex Content`.<br />Jobs that aren't managed may be enabled or disabled via the Stroom Jobs pane. |  |  |
@@ -607,7 +607,7 @@ _Appears in:_ [StroomCluster](#stroomcluster)
 | `podManagementPolicy` _[PodManagementPolicyType](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#podmanagementpolicytype-v1-apps)_ | Pod management policy to use when deploying or scaling the StroomCluster |  |  |
 | `nodeTerminationPeriodSecs` _integer_ | Amount of time granted to nodes to drain their active tasks before being terminated | `60` |  |
 | `volumeClaimDeletePolicy` _[VolumeClaimDeletePolicy](#volumeclaimdeletepolicy)_ | Delete Stroom node `PersistentVolumeClaim`s in accordance with this policy |  | Enum: [DeleteOnScaledownAndClusterDeletion DeleteOnScaledownOnly] |
-| `nodeSets` _[NodeSet](#nodeset) array_ | Each NodeSet is a functional grouping of Stroom nodes with a particular role, within the cluster.<br />It is recommended two NodeSets should be provided: one for storing and processing data and a separate one for<br />serving the Stroom front-end. |  | MaxItems: 20<br />MinItems: 1 |
+| `nodeSets` _[NodeSet](#nodeset) array_ | Each NodeSet is a functional grouping of Stroom nodes with a particular role, within the cluster.<br />It is recommended two NodeSets should be provided: one for storing and processing data and a separate one for<br />serving the Stroom front-end. NodeSet names are unique within the StroomCluster. |  | MaxItems: 20<br />MinItems: 1 |
 | `extraJvmOpts` _string array_ | Additional Java Virtual Machine (JVM) options to use. Example of a valid entry: `-Xms1g` |  |  |
 | `extraEnv` _[EnvVar](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#envvar-v1-core) array_ | Additional environment variables provided to each NodeSet pod |  |  |
 | `extraVolumes` _[Volume](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#volume-v1-core) array_ | Additional volumes to be mounted in each NodeSet pod |  |  |

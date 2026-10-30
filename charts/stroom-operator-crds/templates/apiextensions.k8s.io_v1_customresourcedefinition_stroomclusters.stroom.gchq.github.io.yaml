@@ -117,8 +117,9 @@ spec:
                         type: object
                     type: object
                   serverRef:
-                    description: If specified, point to an operator-managed DatabaseServer
-                      object
+                    description: |-
+                      If specified, point to an operator-managed DatabaseServer object. Its connection doesn't use serverAddress.tls,
+                      which can't be set with it.
                     properties:
                       name:
                         type: string
@@ -134,6 +135,12 @@ spec:
                       A corresponding key should exist in the provided Secret referenced by SecretName.
                     type: string
                 type: object
+                x-kubernetes-validations:
+                - message: 'serverAddress.tls applies to an external database only:
+                    it can''t be set with serverRef'
+                  rule: '!(has(self.serverRef) && (size(self.serverRef.name) > 0 ||
+                    (has(self.serverRef.namespace) && size(self.serverRef.namespace)
+                    > 0)) && has(self.serverAddress) && has(self.serverAddress.tls))'
               extraEnv:
                 description: Additional environment variables provided to each NodeSet
                   pod
@@ -2640,7 +2647,7 @@ spec:
                 description: |-
                   Each NodeSet is a functional grouping of Stroom nodes with a particular role, within the cluster.
                   It is recommended two NodeSets should be provided: one for storing and processing data and a separate one for
-                  serving the Stroom front-end.
+                  serving the Stroom front-end. NodeSet names are unique within the StroomCluster.
                 items:
                   properties:
                     affinity:
@@ -4263,7 +4270,12 @@ spec:
 
                         For example, the first Stroom node in StroomCluster `dev`, NodeSet `data` will be named:
                         `stroom-dev-node-data-0`.
+
+                        It is a DNS label: lowercase letters, digits and hyphens. The StatefulSet name, `<nodeNamePrefix>-<nodeset name>`
+                        or `stroom-<cluster name>-node-<nodeset name>`, can be at most 52 characters, so that its Pods' labels and the
+                        NodeSet's `-http` Service name fit Kubernetes' 63-character limit.
                       maxLength: 30
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                       type: string
                     nodeSelector:
                       additionalProperties:
@@ -5093,6 +5105,9 @@ spec:
                 maxItems: 20
                 minItems: 1
                 type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               nodeTerminationPeriodSecs:
                 default: 60
                 description: Amount of time granted to nodes to drain their active
@@ -5182,6 +5197,13 @@ spec:
                 type: array
             type: object
         type: object
+        x-kubernetes-validations:
+        - message: 'a NodeSet''s StatefulSet name, <nodeNamePrefix>-<NodeSet name>
+            or stroom-<cluster name>-node-<NodeSet name>, can be at most 52 characters:
+            shorten the NodeSet, prefix or cluster name'
+          rule: '!has(self.spec) || self.spec.nodeSets.all(n, (has(self.spec.nodeNamePrefix)
+            ? size(self.spec.nodeNamePrefix) + 1 : size(self.metadata.name) + 13)
+            + size(n.name) <= 52)'
     served: true
     storage: true
     subresources:

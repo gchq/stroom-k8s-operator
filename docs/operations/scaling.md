@@ -45,7 +45,8 @@ kubectl -n stroom delete statefulset stroom-dev-node-old
 kubectl -n stroom delete service stroom-dev-node-old stroom-dev-node-old-http
 ```
 
-Each node is drained as it stops. Its PersistentVolumeClaims are kept; delete them when you no longer need them:
+The operator deletes the removed node set's PodDisruptionBudget, if it had one. Each node is drained as it stops. Its
+PersistentVolumeClaims are kept; delete them when you no longer need them:
 
 ```shell
 kubectl -n stroom delete pvc -l stroom/cluster=dev,stroom/nodeSet=old

@@ -2,6 +2,7 @@ package v1
 
 import (
 	"context"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -150,6 +151,66 @@ var _ = Describe("StroomCluster node validation", func() {
 			cluster := create(newCluster(nodeSet("proc", 2)))
 			cluster.Spec.NodeSets[0].Count = 1
 			Expect(k8sClient.Update(ctx, cluster)).To(Succeed())
+		})
+	})
+
+	Context("NodeSet names", func() {
+		It("should refuse two NodeSets with the same name", func() {
+			Expect(k8sClient.Create(ctx, newCluster(nodeSet("proc", 3), nodeSet("proc", 1)))).ToNot(Succeed())
+		})
+		It("should refuse an update that gives two NodeSets the same name, even with preventNodeRemoval", func() {
+			cluster := newCluster(nodeSet("proc", 3), nodeSet("ui", 1))
+			cluster.Spec.PreventNodeRemoval = true
+			create(cluster)
+			cluster.Spec.NodeSets[1].Name = "proc"
+			cluster.Spec.NodeSets[1].Count = 3
+			Expect(k8sClient.Update(ctx, cluster)).ToNot(Succeed())
+		})
+		It("should refuse a name that isn't a DNS label", func() {
+			for _, name := range []string{"Proc", "proc_1", "-proc", "proc-", "proc.1"} {
+				Expect(k8sClient.Create(ctx, newCluster(nodeSet(name, 1)))).ToNot(Succeed(), name)
+			}
+		})
+		It("should accept a DNS label", func() {
+			create(newCluster(nodeSet("proc-1", 1), nodeSet("2ui", 1)))
+		})
+	})
+
+	Context("StatefulSet name length", func() {
+		const refusal = "can be at most 52 characters"
+		named := func(name string, nodeSets ...NodeSet) *StroomCluster {
+			cluster := newCluster(nodeSets...)
+			cluster.Name = name
+			return cluster
+		}
+		expectCreateRefused := func(cluster *StroomCluster) {
+			err := k8sClient.Create(ctx, cluster)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring(refusal))
+		}
+
+		It("should accept the longest name with a prefix", func() {
+			cluster := newCluster(nodeSet(strings.Repeat("n", 30), 1))
+			cluster.Spec.NodeNamePrefix = "p" + strings.Repeat("x", 20)
+			create(cluster)
+			Expect(len(cluster.GetNodeSetName(&cluster.Spec.NodeSets[0]))).To(Equal(MaxNodeSetNameLength))
+		})
+		It("should refuse a name one character longer with a prefix", func() {
+			cluster := newCluster(nodeSet("proc", 1), nodeSet(strings.Repeat("n", 30), 1))
+			cluster.Spec.NodeNamePrefix = "p" + strings.Repeat("x", 21)
+			expectCreateRefused(cluster)
+		})
+		It("should accept the longest name from the cluster name", func() {
+			cluster := create(named("c"+strings.Repeat("x", 8)+"-"+rand.String(5), nodeSet(strings.Repeat("n", 24), 1)))
+			Expect(len(cluster.GetNodeSetName(&cluster.Spec.NodeSets[0]))).To(Equal(MaxNodeSetNameLength))
+		})
+		It("should refuse a name one character longer from the cluster name", func() {
+			expectCreateRefused(named("c"+strings.Repeat("x", 8)+"-"+rand.String(5), nodeSet(strings.Repeat("n", 25), 1)))
+		})
+		It("should refuse an update adding a NodeSet whose name is too long", func() {
+			cluster := create(named("c"+strings.Repeat("x", 8)+"-"+rand.String(5), nodeSet("proc", 1)))
+			cluster.Spec.NodeSets = append(cluster.Spec.NodeSets, nodeSet(strings.Repeat("n", 25), 1))
+			expectRefused(cluster, refusal)
 		})
 	})
 })

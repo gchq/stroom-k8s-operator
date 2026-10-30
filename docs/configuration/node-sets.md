@@ -22,6 +22,13 @@ Each node's Pod name, which is also its Stroom node name, is `stroom-<cluster na
 For example, the first node of node set `data` in cluster `dev` is `stroom-dev-node-data-0`. Keep node set names
 short. Changing a node set's name creates a new set of nodes; see [Removing a node set](../operations/scaling.md#removing-a-node-set).
 
+Node set names must be unique within the cluster, and DNS labels: lower-case letters, digits and hyphens, starting
+and ending with a letter or digit, at most 30 characters. The node set's StatefulSet name, `stroom-<cluster
+name>-node-<node set name>` (or `<nodeNamePrefix>-<node set name>`), can be at most 52 characters, so that its
+Pods' labels and its `-http` Service name fit Kubernetes' 63-character limit: the cluster name and node set name
+together can be at most 39 characters, or the prefix and node set name at most 51. The API server refuses a
+`StroomCluster` that breaks these rules.
+
 ## Roles
 
 | `role` | Receives event data | Serves the UI and API | Managed jobs (default) | Autoscaled |

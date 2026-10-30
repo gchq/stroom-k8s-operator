@@ -16,8 +16,9 @@
 - The operator's Stroom API key, which the node scripts use, is now created and renewed with `EXTERNAL_IDP` too,
   not only `INTERNAL_IDP`: Stroom accepts API keys with either identity provider type. Nodes no longer need a token
   from the IdP to start, enable their jobs or drain, so an IdP outage doesn't stop nodes starting or draining. The
-  API key Job does need the IdP, as Stroom's CLI runs as the processing user. Existing `EXTERNAL_IDP` clusters run
-  the Job and then roll once, to mount the key.
+  API key Job does need the IdP, as Stroom's CLI runs as the processing user. With `EXTERNAL_IDP`, the nodes are
+  still created and updated while the Job runs or is retried, the scripts falling back to a token from the IdP
+  until the key exists; with `INTERNAL_IDP`, they wait for the key, as before.
 - An external database connection can verify the server's certificate: `serverAddress.tls` sets the TLS mode
   (`Disabled`, `Preferred`, `Required`, `VerifyCA` or `VerifyIdentity`, MySQL's `sslMode`) and, optionally, a
   ConfigMap key holding the CA certificates, such as the Amazon RDS bundle. Stroom's JDBC URLs and the operator's
@@ -33,7 +34,34 @@
   allow, so a change to `localDataVolumeClaim` no longer makes every later update of the NodeSet fail. It applies to
   new NodeSets only; existing PVCs are resized by hand.
 - NodeSet names are limited to 30 characters and a StroomCluster to 20 NodeSets, to keep the API server's validation
-  cost bounded. Existing longer names are kept while unchanged.
+  cost bounded.
+- NodeSet names must be unique within a StroomCluster (`nodeSets` is now a list map keyed by `name`), and DNS
+  labels. A NodeSet's StatefulSet name, `stroom-<cluster>-node-<nodeset>` or `<nodeNamePrefix>-<nodeset>`, can be
+  at most 52 characters, so its Pods' `controller-revision-hash` label and its `-http` Service name fit in 63
+  characters. Clusters that broke these rules couldn't run: two NodeSets with one name shared a StatefulSet, and
+  longer StatefulSet names gave Pods or Services Kubernetes refused.
+- `databaseServerRef.serverAddress.tls` is refused with `databaseServerRef.serverRef`, which ignores it.
+- The operator no longer changes an existing StatefulSet, Service, PodDisruptionBudget, Ingress, ConfigMap, Role or
+  RoleBinding that another owner controls, for example another StroomCluster's whose `nodeNamePrefix` gives the
+  same names. It reports a `NameConflict` Warning Event and an error instead. Ingresses now have the StroomCluster
+  as their controller, as the other objects do; ones created by earlier versions are adopted.
+- The PodDisruptionBudget of a NodeSet removed from the StroomCluster is deleted.
+- With a `DeleteOnScaledown…` `volumeClaimDeletePolicy`, the PVCs deleted on scale-down are those whose ordinals
+  are the NodeSet's count or more, rather than those of the Pods the StatefulSet last ran, so PVCs of nodes removed
+  while the cluster was stopped are deleted when it starts again.
+
+### Upgrade notes
+
+- HTTPS clusters whose NodeSets set `securityContext` roll once, as the `generate-keystore` init container now runs
+  with the NodeSet's `securityContext`.
+- `EXTERNAL_IDP` clusters roll once, to mount the API key Secret, and run the API key Job.
+- The 30-character limit and DNS-label pattern on NodeSet names keep an existing name that breaks them only through
+  CRD validation ratcheting, which is on by default from Kubernetes 1.30 (beta; GA in 1.33). From 1.30, such a
+  NodeSet is kept while its name is unchanged, even when other fields change. On Kubernetes 1.25 to 1.29, every
+  update to a StroomCluster with such a NodeSet name is refused until the name is shortened, and renaming a NodeSet
+  replaces its nodes: check NodeSet names before upgrading the CRDs. The 52-character StatefulSet name limit, a rule
+  on the whole StroomCluster, isn't ratcheted on any version, and duplicate NodeSet names aren't guaranteed to be,
+  but clusters that broke them weren't working.
 
 ## 2.0.0
 

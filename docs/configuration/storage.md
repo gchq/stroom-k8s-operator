@@ -102,6 +102,10 @@ created again, each node gets back the claim (and data) it had before. `spec.vol
 | `DeleteOnScaledownOnly` | Claims of the removed nodes deleted | Claims kept |
 | `DeleteOnScaledownAndClusterDeletion` | Claims of the removed nodes deleted | All the cluster's claims deleted |
 
+The claims deleted on scale-down are those of the node set's nodes whose ordinals are `count` or more, so the claims
+of nodes removed while the cluster was stopped (`spec.stopped`) are deleted when it starts again. While it is stopped,
+no claims are deleted.
+
 Whether the PersistentVolume, and its data, survives a deleted claim depends on the volume's reclaim policy. With
 `Retain`, the volume moves to `Released` and must be cleaned up and made `Available` again by hand before it can be
 reused.

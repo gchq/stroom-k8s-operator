@@ -18,7 +18,10 @@ authenticate with a **Stroom API key** that the operator creates and renews:
 3. The operator replaces the key 35 days before it expires.
 
 The CLI works on Stroom's database, so the user exists only in Stroom. With an external IdP, nothing can sign in
-interactively as that user. The operator creates the key before it creates the nodes.
+interactively as that user. With `INTERNAL_IDP`, the operator creates the key before it creates or updates the nodes,
+as the scripts have no other way to authenticate. With `EXTERNAL_IDP`, it creates and updates the nodes while the Job
+runs, or fails and is retried: until there's a key, the scripts use a token from the IdP (see below), and the key
+reaches the nodes once the Job writes it.
 
 Stroom checks an API key before any IdP token, and doesn't contact the IdP to do so. So once the key exists, nodes
 start, enable their jobs, and drain before they stop, even while an external IdP is unreachable.

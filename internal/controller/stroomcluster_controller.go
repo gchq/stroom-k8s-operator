@@ -22,6 +22,7 @@ import (
 	goerrors "errors"
 	"fmt"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -160,6 +161,9 @@ func (r *StroomClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		},
 	}
 	operationResult, err := controllerutil.CreateOrUpdate(ctx, r.Client, &existingConfigMap, func() error {
+		if err := r.checkControlled(&stroomCluster, &existingConfigMap, "ConfigMap"); err != nil {
+			return err
+		}
 		existingConfigMap.Labels = newConfigMap.Labels
 		existingConfigMap.Annotations = newConfigMap.Annotations
 		existingConfigMap.OwnerReferences = newConfigMap.OwnerReferences
@@ -182,6 +186,9 @@ func (r *StroomClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			},
 		}
 		operationResult, err := controllerutil.CreateOrUpdate(ctx, r.Client, &existingConfigMap, func() error {
+			if err := r.checkControlled(&stroomCluster, &existingConfigMap, "ConfigMap"); err != nil {
+				return err
+			}
 			existingConfigMap.Labels = newConfigMap.Labels
 			existingConfigMap.Annotations = newConfigMap.Annotations
 			existingConfigMap.OwnerReferences = newConfigMap.OwnerReferences
@@ -203,7 +210,13 @@ func (r *StroomClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 	if !apiKeyReady {
-		return apiKeyResult, nil
+		if stroomCluster.Spec.GetIdentityProviderType() == stroomv1.InternalIdp {
+			// The node scripts have no other way to call Stroom's API, so hold the nodes until the key exists
+			return apiKeyResult, nil
+		}
+		// With an external IdP, the node scripts fall back to a token from the IdP, so the nodes are reconciled while
+		// the API key Job runs, or fails and is retried
+		logger.Info("No API key yet. Reconciling the nodes, whose scripts use a token from the external IdP until there is one")
 	}
 
 	// Don't create or change the nodes while their DatabaseServer is being updated, as a node stopping then can't
@@ -237,6 +250,9 @@ func (r *StroomClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			},
 		}
 		operationResult, err = controllerutil.CreateOrUpdate(ctx, r.Client, &existingService, func() error {
+			if err := r.checkControlled(&stroomCluster, &existingService, "Service"); err != nil {
+				return err
+			}
 			existingService.Labels = newService.Labels
 			existingService.Annotations = newService.Annotations
 			existingService.OwnerReferences = newService.OwnerReferences
@@ -258,6 +274,9 @@ func (r *StroomClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			},
 		}
 		operationResult, err = controllerutil.CreateOrUpdate(ctx, r.Client, &existingService, func() error {
+			if err := r.checkControlled(&stroomCluster, &existingService, "Service"); err != nil {
+				return err
+			}
 			existingService.Labels = newService.Labels
 			existingService.Annotations = newService.Annotations
 			existingService.OwnerReferences = newService.OwnerReferences
@@ -273,6 +292,9 @@ func (r *StroomClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			return ctrl.Result{}, err
 		}
 	}
+	if err := r.deleteRemovedPodDisruptionBudgets(ctx, &stroomCluster); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	ingresses := r.createIngresses(ctx, &stroomCluster)
 	for _, newIngress := range ingresses {
@@ -284,6 +306,9 @@ func (r *StroomClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			},
 		}
 		operationResult, err := controllerutil.CreateOrUpdate(ctx, r.Client, &existingIngress, func() error {
+			if err := r.checkControlled(&stroomCluster, &existingIngress, "Ingress"); err != nil {
+				return err
+			}
 			existingIngress.Labels = newIngress.Labels
 			existingIngress.Annotations = newIngress.Annotations
 			existingIngress.OwnerReferences = newIngress.OwnerReferences
@@ -314,9 +339,10 @@ func (r *StroomClusterReconciler) reconcileNodeStatefulSet(ctx context.Context, 
 			Namespace: newStatefulSet.Namespace,
 		},
 	}
-	var oldReplicaCount int32
 	operationResult, err := controllerutil.CreateOrUpdate(ctx, r.Client, &existingStatefulSet, func() error {
-		oldReplicaCount = existingStatefulSet.Status.Replicas
+		if err := r.checkControlled(stroomCluster, &existingStatefulSet, "StatefulSet"); err != nil {
+			return err
+		}
 		existingStatefulSet.Labels = newStatefulSet.Labels
 		existingStatefulSet.Annotations = newStatefulSet.Annotations
 		existingStatefulSet.OwnerReferences = newStatefulSet.OwnerReferences
@@ -335,10 +361,10 @@ func (r *StroomClusterReconciler) reconcileNodeStatefulSet(ctx context.Context, 
 		return err
 	}
 	logger.Info("StatefulSet reconciled", "Result", operationResult, "Namespace", existingStatefulSet.Namespace, "Name", existingStatefulSet.Name)
-	if operationResult == controllerutil.OperationResultUpdated && !stroomCluster.Spec.Stopped {
-		// StatefulSet may have been scaled down, so delete excess PVCs, depending on deletion policy. A stopped
+	if !stroomCluster.Spec.Stopped {
+		// The NodeSet may have been scaled down, so delete excess PVCs, depending on deletion policy. A stopped
 		// cluster keeps them all, as its nodes will start again.
-		return r.deletePvcs(ctx, stroomCluster, nodeSet, oldReplicaCount, *newStatefulSet.Spec.Replicas)
+		return r.deletePvcs(ctx, stroomCluster, nodeSet)
 	}
 	return nil
 }
@@ -374,6 +400,9 @@ func (r *StroomClusterReconciler) reconcilePodDisruptionBudget(ctx context.Conte
 		},
 	}
 	operationResult, err := controllerutil.CreateOrUpdate(ctx, r.Client, &existingPdb, func() error {
+		if err := r.checkControlled(stroomCluster, &existingPdb, "PodDisruptionBudget"); err != nil {
+			return err
+		}
 		existingPdb.Labels = newPdb.Labels
 		existingPdb.OwnerReferences = newPdb.OwnerReferences
 		existingPdb.Spec = newPdb.Spec
@@ -384,6 +413,52 @@ func (r *StroomClusterReconciler) reconcilePodDisruptionBudget(ctx context.Conte
 	}
 	logger.Info("PodDisruptionBudget reconciled", "Result", operationResult, "Namespace", existingPdb.Namespace, "Name", existingPdb.Name)
 	return nil
+}
+
+// deleteRemovedPodDisruptionBudgets deletes the PodDisruptionBudgets of NodeSets that have been removed from the
+// StroomCluster. Those of NodeSets still in it are left to reconcilePodDisruptionBudget.
+func (r *StroomClusterReconciler) deleteRemovedPodDisruptionBudgets(ctx context.Context, stroomCluster *stroomv1.StroomCluster) error {
+	logger := log.FromContext(ctx)
+
+	nodeSetNames := make(map[string]bool, len(stroomCluster.Spec.NodeSets))
+	for i := range stroomCluster.Spec.NodeSets {
+		nodeSetNames[stroomCluster.GetNodeSetName(&stroomCluster.Spec.NodeSets[i])] = true
+	}
+
+	var pdbs policyv1.PodDisruptionBudgetList
+	if err := r.List(ctx, &pdbs, client.InNamespace(stroomCluster.Namespace), client.MatchingLabels(stroomCluster.GetLabels())); err != nil {
+		return err
+	}
+	for i := range pdbs.Items {
+		pdb := &pdbs.Items[i]
+		if nodeSetNames[pdb.Name] || !metav1.IsControlledBy(pdb, stroomCluster) {
+			continue
+		}
+		if err := r.Delete(ctx, pdb); client.IgnoreNotFound(err) != nil {
+			return err
+		}
+		logger.Info("PodDisruptionBudget of a removed NodeSet deleted", "Namespace", pdb.Namespace, "Name", pdb.Name)
+	}
+	return nil
+}
+
+// checkControlled returns an error, and records a Warning Event, if an object the StroomCluster creates already exists
+// and isn't controlled by it, as when another StroomCluster's nodeNamePrefix gives its objects the same names. Called
+// from CreateOrUpdate's mutate functions, so the object isn't changed. An object with no controller but the
+// StroomCluster's label is adopted: earlier operator versions created Ingresses without an owner reference.
+func (r *StroomClusterReconciler) checkControlled(stroomCluster *stroomv1.StroomCluster, obj client.Object, kind string) error {
+	if obj.GetResourceVersion() == "" || metav1.IsControlledBy(obj, stroomCluster) {
+		return nil
+	}
+	if metav1.GetControllerOf(obj) == nil && obj.GetLabels()[stroomv1.StroomClusterLabel] == stroomCluster.Name {
+		return nil
+	}
+	err := fmt.Errorf("%v %v/%v already exists and isn't controlled by StroomCluster %v, so it isn't changed. "+
+		"Another StroomCluster's nodeNamePrefix may give its objects the same names", kind, obj.GetNamespace(), obj.GetName(), stroomCluster.Name)
+	if r.Recorder != nil {
+		r.Recorder.Eventf(stroomCluster, obj, corev1.EventTypeWarning, "NameConflict", "Reconcile", "%v", err.Error())
+	}
+	return err
 }
 
 // volumeClaimTemplatesMatch returns whether two lists of volume claim templates ask for the same claims: the same
@@ -439,28 +514,35 @@ func statefulSetSettled(statefulSet *appsv1.StatefulSet, templateHash string) (b
 	return true, ""
 }
 
-func (r *StroomClusterReconciler) deletePvcs(ctx context.Context, stroomCluster *stroomv1.StroomCluster, nodeSet *stroomv1.NodeSet, oldReplicaCount int32, newReplicaCount int32) error {
+// deletePvcs deletes the PVCs of a NodeSet's nodes beyond its count, if the VolumeClaimDeletePolicy says to. It goes by
+// the PVCs that exist, rather than how many Pods the StatefulSet had, so the PVCs of nodes removed while the cluster was
+// stopped, or while the operator wasn't running, are deleted too. Not called while the cluster is stopped.
+func (r *StroomClusterReconciler) deletePvcs(ctx context.Context, stroomCluster *stroomv1.StroomCluster, nodeSet *stroomv1.NodeSet) error {
 	logger := log.FromContext(ctx)
 
-	// Depending on the VolumeClaimDeletePolicy, delete any PVCs no longer associated with pods
 	pvcDeletePolicy := stroomCluster.Spec.VolumeClaimDeletePolicy
-	if oldReplicaCount > newReplicaCount && (pvcDeletePolicy == stroomv1.DeleteOnScaledownAndClusterDeletionPolicy || pvcDeletePolicy == stroomv1.DeleteOnScaledownOnlyPolicy) {
-		// NodeSet has scaled down, so remove any PVCs associated with deleted pods
-		for podOrdinal := newReplicaCount + 1; podOrdinal <= oldReplicaCount; podOrdinal++ {
-			// Attempt to delete PVC named in accordance with convention:
-			// <PVC name>-<NodeSet name>-<ordinal>
-			pvcName := fmt.Sprintf("%v-%v-%v", StroomNodePvcName, stroomCluster.GetNodeSetName(nodeSet), podOrdinal-1)
-			foundPvc := corev1.PersistentVolumeClaim{}
-			if err := r.Get(ctx, types.NamespacedName{Namespace: stroomCluster.Namespace, Name: pvcName}, &foundPvc); err != nil {
-				logger.Error(err, "Could not find PVC in order to delete it", "Namespace", stroomCluster.Namespace, "Name", pvcName)
-				// Continue, as this isn't a critical error
-			} else {
-				if err := r.Delete(ctx, &foundPvc); err != nil {
-					logger.Error(err, "PVC could not be deleted", "Namespace", foundPvc.Namespace, "Name", foundPvc.Name)
-				} else {
-					logger.Info("PVC deleted due to StroomCluster deletion policy", "Namespace", foundPvc.Namespace, "Name", foundPvc.Name)
-				}
-			}
+	if pvcDeletePolicy != stroomv1.DeleteOnScaledownAndClusterDeletionPolicy && pvcDeletePolicy != stroomv1.DeleteOnScaledownOnlyPolicy {
+		return nil
+	}
+
+	var pvcs corev1.PersistentVolumeClaimList
+	if err := r.List(ctx, &pvcs, client.InNamespace(stroomCluster.Namespace), client.MatchingLabels(r.createNodeSetPvcLabels(stroomCluster, nodeSet))); err != nil {
+		return err
+	}
+	// PVCs are named in accordance with convention: <PVC name>-<StatefulSet name>-<ordinal>
+	namePrefix := fmt.Sprintf("%v-%v-", StroomNodePvcName, stroomCluster.GetNodeSetName(nodeSet))
+	for i := range pvcs.Items {
+		pvc := &pvcs.Items[i]
+		ordinal, err := strconv.Atoi(strings.TrimPrefix(pvc.Name, namePrefix))
+		if !strings.HasPrefix(pvc.Name, namePrefix) || err != nil || ordinal < int(nodeSet.Count) || !pvc.DeletionTimestamp.IsZero() {
+			continue
+		}
+		// The NodeSet has scaled down, so remove the PVC of a node that no longer exists
+		if err := r.Delete(ctx, pvc); client.IgnoreNotFound(err) != nil {
+			logger.Error(err, "PVC could not be deleted", "Namespace", pvc.Namespace, "Name", pvc.Name)
+			// Continue, as this isn't a critical error
+		} else {
+			logger.Info("PVC deleted due to StroomCluster deletion policy", "Namespace", pvc.Namespace, "Name", pvc.Name)
 		}
 	}
 

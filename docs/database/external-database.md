@@ -43,7 +43,7 @@ spec:
 ```
 
 Don't set `serverRef` as well: if `serverRef` is set, the operator uses the `DatabaseServer` and ignores
-`serverAddress`.
+`serverAddress`. The API server refuses `serverAddress.tls` with `serverRef`, as it would be ignored.
 
 ## 4. Verify the server's certificate (optional)
 

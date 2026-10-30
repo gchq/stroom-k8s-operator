@@ -260,7 +260,7 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 
 	// Mount the operator-managed API key, which the node scripts use with either identity provider type. Mounted as a
 	// directory (not subPath), so a rotated key becomes visible to running pods without a restart.
-	volumes = append(volumes, corev1.Volume{
+	apiKeyVolume := corev1.Volume{
 		Name: StroomApiKeyVolumeName,
 		VolumeSource: corev1.VolumeSource{
 			Secret: &corev1.SecretVolumeSource{
@@ -271,7 +271,14 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 				}},
 			},
 		},
-	})
+	}
+	if stroomCluster.Spec.GetIdentityProviderType() == stroomv1.ExternalIdp {
+		// The nodes start before the API key Job has filled in the Secret, and the scripts use a token from the IdP until
+		// it has. The key appears in the volume once it's written.
+		optional := true
+		apiKeyVolume.Secret.Optional = &optional
+	}
+	volumes = append(volumes, apiKeyVolume)
 
 	if !stroomCluster.Spec.Https.IsZero() {
 		volumes = append(volumes, []corev1.Volume{
@@ -1054,8 +1061,9 @@ func (r *StroomClusterReconciler) createIngresses(ctx context.Context, stroomClu
 		}
 	}
 
-	for _, ingress := range ingresses {
-		if err := ctrl.SetControllerReference(stroomCluster, &ingress, r.Scheme); err != nil {
+	for i := range ingresses {
+		ingress := &ingresses[i]
+		if err := ctrl.SetControllerReference(stroomCluster, ingress, r.Scheme); err != nil {
 			logger.Error(err, fmt.Sprintf("Could not set controller reference on ingress '%v/%v'", ingress.Namespace, ingress.Name))
 		}
 	}

@@ -10,6 +10,13 @@ metadata:
     stroom/cluster: full
   name: stroom-full-datafeed
   namespace: golden-full
+  ownerReferences:
+  - apiVersion: stroom.gchq.github.io/v1
+    blockOwnerDeletion: true
+    controller: true
+    kind: StroomCluster
+    name: full
+    uid: <uid>
 spec:
   ingressClassName: nginx
   rules:

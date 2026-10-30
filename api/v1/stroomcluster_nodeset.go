@@ -14,7 +14,12 @@ type NodeSet struct {
 	//
 	// For example, the first Stroom node in StroomCluster `dev`, NodeSet `data` will be named:
 	// `stroom-dev-node-data-0`.
+	//
+	// It is a DNS label: lowercase letters, digits and hyphens. The StatefulSet name, `<nodeNamePrefix>-<nodeset name>`
+	// or `stroom-<cluster name>-node-<nodeset name>`, can be at most 52 characters, so that its Pods' labels and the
+	// NodeSet's `-http` Service name fit Kubernetes' 63-character limit.
 	// +kubebuilder:validation:MaxLength=30
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	Name string `json:"name"`
 	// Number of replicas (discrete Stroom nodes) to deploy in the NodeSet
 	// +kubebuilder:validation:Minimum=1

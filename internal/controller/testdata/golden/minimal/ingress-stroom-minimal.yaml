@@ -10,6 +10,13 @@ metadata:
     stroom/cluster: minimal
   name: stroom-minimal
   namespace: golden-minimal
+  ownerReferences:
+  - apiVersion: stroom.gchq.github.io/v1
+    blockOwnerDeletion: true
+    controller: true
+    kind: StroomCluster
+    name: minimal
+    uid: <uid>
 spec:
   rules:
   - host: stroom.example.com

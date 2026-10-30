@@ -25,6 +25,11 @@ import (
 const (
 	StroomClusterLabel = "stroom/cluster"
 	NodeSetLabel       = "stroom/nodeSet"
+	// MaxNodeSetNameLength is the longest a NodeSet's StatefulSet name, from GetNodeSetName, can be. Its Pods'
+	// controller-revision-hash label is the StatefulSet name, a hyphen and a hash of up to 10 characters, and must fit
+	// in a label value's 63 characters; the Pod names and the NodeSet's `-http` Service name are then short enough too.
+	// The StroomCluster's CEL rule checks it, as GetNodeSetName builds the name.
+	MaxNodeSetNameLength = 52
 )
 
 // StroomClusterStatus defines the observed state of StroomCluster
@@ -36,6 +41,7 @@ type StroomClusterStatus struct {
 //+kubebuilder:subresource:status
 
 // StroomCluster is a cluster of Stroom nodes, in one or more NodeSets
+// +kubebuilder:validation:XValidation:rule="!has(self.spec) || self.spec.nodeSets.all(n, (has(self.spec.nodeNamePrefix) ? size(self.spec.nodeNamePrefix) + 1 : size(self.metadata.name) + 13) + size(n.name) <= 52)",message="a NodeSet's StatefulSet name, <nodeNamePrefix>-<NodeSet name> or stroom-<cluster name>-node-<NodeSet name>, can be at most 52 characters: shorten the NodeSet, prefix or cluster name"
 type StroomCluster struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

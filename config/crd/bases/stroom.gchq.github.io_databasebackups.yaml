@@ -108,8 +108,9 @@ spec:
                         type: object
                     type: object
                   serverRef:
-                    description: If specified, point to an operator-managed DatabaseServer
-                      object
+                    description: |-
+                      If specified, point to an operator-managed DatabaseServer object. Its connection doesn't use serverAddress.tls,
+                      which can't be set with it.
                     properties:
                       name:
                         type: string
@@ -125,6 +126,12 @@ spec:
                       A corresponding key should exist in the provided Secret referenced by SecretName.
                     type: string
                 type: object
+                x-kubernetes-validations:
+                - message: 'serverAddress.tls applies to an external database only:
+                    it can''t be set with serverRef'
+                  rule: '!(has(self.serverRef) && (size(self.serverRef.name) > 0 ||
+                    (has(self.serverRef.namespace) && size(self.serverRef.namespace)
+                    > 0)) && has(self.serverAddress) && has(self.serverAddress.tls))'
               image:
                 description: |-
                   Image the backup runs in, which must have `bash`, `mysqldump` and `gzip`, such as the official `mysql:8.4`

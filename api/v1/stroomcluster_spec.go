@@ -70,9 +70,11 @@ type StroomClusterSpec struct {
 
 	// Each NodeSet is a functional grouping of Stroom nodes with a particular role, within the cluster.
 	// It is recommended two NodeSets should be provided: one for storing and processing data and a separate one for
-	// serving the Stroom front-end.
+	// serving the Stroom front-end. NodeSet names are unique within the StroomCluster.
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=20
+	// +listType=map
+	// +listMapKey=name
 	NodeSets []NodeSet `json:"nodeSets"`
 
 	// Additional Java Virtual Machine (JVM) options to use. Example of a valid entry: `-Xms1g`
