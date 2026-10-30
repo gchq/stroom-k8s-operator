@@ -36,9 +36,9 @@ From the 7.14 source (`7.14` branch, CHANGELOG at `v7.14-beta.8`/`beta.9`), stro
 | S10 | LMDB (reference data, search results, analytics, duplicate check, Plan B) must not be on remote storage. The docs found EBS "VERY slow" for the reference store and recommend instance-store SSD; the reference store can be rebuilt, so losing it is acceptable. LMDB uses the OS page cache, which counts against the pod's memory. | LMDB stores that can be rebuilt go on instance-store NVMe; those that must survive node replacement (analytics, duplicate check, Plan B) go on EBS. Memory limits leave room for page cache (section 5). |
 | S11 | Nodes find each other through the database: each node writes its name and endpoint URL (`appConfig.node.name`, `appConfig.nodeUri`) on boot, and nodes call each other over the application port. Jobs, index volumes and Plan B `nodeList` are keyed by node name. Inter-node calls use a cluster token signed with a key kept in the database, not the IdP. | Node names must be unique and never change: a StatefulSet pod name, with the headless Service name as `nodeUri`. Renaming a node set orphans its index volumes and job rows. Index shards belong to the node that wrote them, so a node can't simply be removed: the cluster has a fixed size, and nodes are added but not taken away (section 11.1). |
 | S12 | The leader ("master") is the enabled node with the highest priority; it hands processor tasks to the others. Every node can serve the UI and process; a UI-only/processing split is a deployment choice (jobs disabled on UI nodes). | Two node sets: `ui` (UI and API, few jobs) and `proc` (processing) (section 11). |
-| S13 | UI sessions are held in memory (`STROOM_SESSION_ID` cookie), so the UI needs sticky sessions and WebSockets (`/web-socket/`). The stack's nginx blocks `clustercall.rpc` from outside. | ALB target group stickiness on the application cookie; ALB rule denying `clustercall.rpc` (section 9). |
+| S13 | UI sessions are held in memory (`STROOM_SESSION_ID` cookie), so the UI needs sticky sessions. The UI no longer uses WebSockets: the 7.14 source has no WebSocket endpoint (only an unused `WebSocketMessage` class), although the older stack nginx config still routes `/web-socket/`. The stack's nginx blocks `clustercall.rpc` from outside. | ALB target group stickiness on the application cookie; ALB rule denying `clustercall.rpc` (section 9). |
 | S14 | Flyway migrations run at start-up under a cluster-wide lock, whenever the database's build version differs from the image's. Nothing says whether two Stroom versions may run against one database at once; the upgrade docs are empty. | Version upgrades stop every node, then start the new version (section 12). Node replacement within a version can roll. |
-| S15 | Ports: 8080 application over HTTP (UI, `/api`, `/datafeed`), 8081 admin (`/stroomAdmin`, healthcheck); the operator adds an HTTPS application connector on 8443 when its `https` settings are given. Default heap `-Xmx2g`; docs give no sizing guidance beyond "production needs more". Java 25 image, uid 1000. | Heap from a variable, sized against the memory limit and LMDB page cache (section 11). The image's architecture must be checked (the proxy image is amd64 only, F2) **(open)**. |
+| S15 | Ports: 8080 application over HTTP (UI, `/api`, `/datafeed`), 8081 admin (`/stroomAdmin`, healthcheck); the operator adds an HTTPS application connector on 8443 when its `https` settings are given. The image's `start.sh` sets `-Xms50m -Xmx2g` unless `JAVA_OPTS` overrides it, which is far too small for production, and the docs give no sizing guidance. Java 25 image, uid 1000. | The image's heap setting is always overridden: the design's default heap is 64 GiB, with bigger instances sized to match (section 11.2). The image's architecture must be checked (the proxy image is amd64 only, F2) **(open)**. |
 | S16 | External IdP config is `appConfig.security.authentication.openId` with `identityProviderType: EXTERNAL_IDP`. Entra ID needs the v2.0 endpoints, an exposed API with `accessTokenAcceptedVersion: 2`, `allowedAudiences` with both `<client id>` and `api://<client id>`, `profile` in `requestScopes`, and `uniqueIdentityClaim: oid` (choose before the first sign-in). Group and role claims are ignored: authorisation is Stroom's own users and groups. Cognito access tokens have no `aud` (`audienceClaimRequired: false`); Keycloak needs an audience mapper. | Per-IdP presets in the module (section 8). The first admin is created with the `manage_users` CLI. |
 | S17 | The operator (`StroomCluster` CR) already does the Stroom-specific lifecycle: enable the node and its jobs on start, disable them and wait for running tasks to finish in `preStop`, drain before deleting a cluster, adjust task limits from CPU (`StroomTaskAutoscaler`), and (internal IdP only) create and rotate an API key for its scripts. It accepts an external database (`serverAddress`). | Deploy Stroom with the operator, after merging upstream (S19) and making the changes in section 10.2. |
 | S18 | Operator problems found by reading the code: pod and node names are `stroom-<cluster>-node-<node set>-<n>` (`GetBaseName`, `GetNodeSetName`), so a cluster named `stroom-prod` gives `stroom-stroom-prod-node-processing-0`; nothing stops a node set's `count` going down or a node set being renamed or removed; its Ingress is nginx-only (hard-coded annotations and rewrite); one PVC per pod with fixed subpaths (`reference_data`, `search_results`, … all on that PVC); no PDB or topology spread; `volumeClaimTemplates` copied on every update, so a size change fails; the probe `periodSeconds` is set from `initialDelaySeconds`; the JDBC URL has no TLS options; the `DatabaseServer` root password is the literal path string; `DatabaseBackup` looks up `batch/v1beta1` CronJobs (gone since 1.25); the sample's HTTPS field name is wrong, so it silently runs plain HTTP; the sample image is `v7.1-LATEST`; the log-sender is root and privileged. | Use the operator without its Ingress, `DatabaseServer` or `DatabaseBackup`. Several of these are already fixed upstream (S19); the rest are changes for v1 (section 10.2). |
@@ -52,18 +52,18 @@ From the 7.14 source (`7.14` branch, CHANGELOG at `v7.14-beta.8`/`beta.9`), stro
           │ HTTPS 443  stroom.…
   ┌───────▼───────────────────────────────────────────────────┐
   │ ALB (internal) — ACM certificate                          │
-  │  /, /api/…, /web-socket/ → ui target group (sticky cookie)│
+  │  /, /api/…  → ui target group (sticky cookie)             │
   │  *clustercall.rpc, /datafeed* → fixed 403                 │
   └───────┬───────────────────────────────────────────────────┘
           │ HTTPS 8443, TargetGroupBinding (operator's ui Service)
   ┌──── same EKS cluster and VPC as the proxy ───────────────────────────────────────┐
   │  namespace stroom                                                                │
   │  ui node set (UI/API)               proc node set (jobs, S3 event poll)          │
-  │  ┌──────────┐┌──────────┐           ┌──────────┐┌──────────┐┌──────────┐         │
-  │  │  …-ui-0  ││  …-ui-1  │ ◀─8443──▶ │ …-proc-0 ││ …-proc-1 ││ …-proc-2 │         │
-  │  │:8443 app ││          │ node↔node │          ││          ││          │         │
-  │  │:8081 adm ││          │           │          ││          ││          │         │
-  │  └──────────┘└──────────┘           └──────────┘└──────────┘└──────────┘         │
+  │  ┌──────────┐                       ┌──────────┐┌──────────┐                     │
+  │  │  …-ui-0  │             ◀─8443──▶ │ …-proc-0 ││ …-proc-1 │                     │
+  │  │:8443 app │             node↔node │          ││          │                     │
+  │  │:8081 adm │                       │          ││          │                     │
+  │  └──────────┘                       └──────────┘└──────────┘                     │
   │   every pod: EBS PVC (index shards, analytics/Plan B LMDB, logs)                 │
   │              NVMe emptyDir (reference data, search results, temp, s3_cache)      │
   │              EFS (shared stream volume)                                          │
@@ -108,11 +108,11 @@ terraform/aws-eks/                 # renamed from terraform/aws-eks-proxy (decis
 │   └── stroom/                    # ALB, Pod Identity, namespace, EFS, StroomCluster CR, bootstrap job
 ├── stacks/
 │   ├── 10-infra/ 20-platform/ 30-stroom-proxy/  # existing
-│   └── 40-stroom/                 # reads 10, 20 and 30 outputs
+│   └── 40-stroom/                 # reads 10 and 20 outputs, and 30's when the proxy is in the cluster
 └── envs/<env>/40-stroom.tfvars
 ```
 
-`40-stroom` is a separate stack so Stroom can be rebuilt without touching the proxy, and so the proxy can run without Stroom. It reads the bucket, queue and key from `30-stroom-proxy`'s remote state, or from variables when the bucket was created elsewhere.
+`40-stroom` is a separate stack so Stroom can be rebuilt without touching the proxy, and so either can run without the other (4.4). It reads the bucket, queue and key from `30-stroom-proxy`'s remote state, or from variables when the bucket is managed elsewhere.
 
 ### 4.3 Apply order
 
@@ -123,7 +123,33 @@ The proxy needs things that only exist once Stroom does (its API key, and Stroom
 3. `40-stroom`: Stroom starts, the bootstrap Job writes the proxy's API key to Secrets Manager (5.4);
 4. `30-stroom-proxy` again with `stroom_downstream` set (8.1): the proxy switches to `RECEIPT_POLICY` in a drained rolling update.
 
-Later applies go in stack order as usual.
+Later applies go in stack order as usual. This is the order for a cluster with both; section 4.4 covers clusters with only one.
+
+### 4.4 Deployment shapes
+
+The same stacks build a cluster with the proxy only, Stroom only, or both:
+
+| Shape | Stacks | Settings |
+|---|---|---|
+| **Proxy only** (as today) | `10-infra`, `20-platform`, `30-stroom-proxy` | `stroom_node_sets = {}` in `10-infra` (the default), `stroom_downstream = null` in `30-stroom-proxy` (the default). |
+| **Stroom only** | `10-infra`, `20-platform`, `40-stroom` | `proxy_node_colours = {}` in `10-infra`; `40-stroom` gets the bucket and queue from variables (`ingest`, section 15), not from `30-stroom-proxy`'s state. |
+| **Both** | all four | As in sections 4.3 and 15. |
+
+**Gating the shared stacks.** Everything this design adds to `10-infra` and `20-platform` exists only when Stroom is deployed, so a proxy-only cluster is unchanged:
+
+* `10-infra`: `stroom_node_sets` (default `{}`) creates the Stroom node groups; the EFS CSI driver add-on and its Pod Identity role are created only when it is non-empty. `proxy_node_colours` may now be empty (today the `eks` module requires one or two colours, `modules/eks/variables.tf`), so a Stroom-only cluster has no proxy nodes. At least one of the two must be non-empty.
+* `20-platform`: reads `10-infra`'s outputs and installs the EFS StorageClass, cert-manager, trust-manager and the in-cluster CA, metrics-server, and the operator with its CRDs only when the cluster has Stroom node groups. The proxy's pieces (LB controller, gp3 StorageClass, External Secrets, CloudWatch) are shared and always installed.
+* trust-manager publishes the CA bundle only to namespaces that exist and carry its label, so it doesn't need to know whether the proxy is there.
+
+**Stroom only: ingest from a bucket managed elsewhere.** With no `30-stroom-proxy` in the cluster, data reaches Stroom only through S3: a Stroom-Proxy somewhere else (another cluster or account) writes to its own bucket. `40-stroom` then takes `ingest.bucket`, `ingest.queue_url`, `ingest.dlq_url`, `ingest.kms_key_arn` and the bucket's expiry settings as variables. The bucket's owner must provide what the proxy stack would otherwise create (section 7):
+
+* the bucket's `ObjectCreated` notifications going **directly** to an SQS queue (no SNS or EventBridge, S2), with a DLQ and redrive policy;
+* proxy-written objects with the feed in user metadata (any 7.14 proxy with S3 forwarding does this, S3);
+* grants for Stroom's Pod Identity role, whose ARN `40-stroom` outputs: `s3:GetObject` and `s3:ListBucket` in the bucket policy; `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:ChangeMessageVisibility` and `sqs:GetQueueAttributes` in the queue policy; `sqs:SendMessage` in the DLQ policy; `kms:Decrypt` in the key policy (7.4). For a bucket in another account, Stroom's role also needs the same actions in its own policy, which `40-stroom` adds for the ARNs it is given.
+
+`40-stroom` can't change another account's policies, so it outputs a JSON snippet of each statement for the owner to apply. Cross-region buckets aren't supported (the read-only volume and the SQS client each take one region, S5).
+
+In this shape the proxy-facing parts are left out: there is no receipt-policy wiring (8.1) and no proxy API key (5.4). A proxy elsewhere that wants receipt rules from this Stroom would need a route to it (for example the UI's ALB over PrivateLink), which is not in v1. Stroom's own `/datafeed` stays closed (9), so a Stroom-only cluster without an external bucket receives no data.
 
 ## 5. Storage
 
@@ -142,7 +168,7 @@ Later applies go in stack order as usual.
 
 ### 5.2 Instance store
 
-Stroom node groups use instance types with local NVMe (`r6id`, `r7id`, `m6id`, `m7id`, `i4i`; the `d` matters). The AL2023 launch template sets `nodeadm`'s `localStorage: {strategy: RAID0}`, which builds a RAID0 array from the NVMe disks and puts kubelet and containerd on it, so `emptyDir` volumes and the container filesystem land on NVMe with no extra provisioner. `emptyDir` `sizeLimit` and the pod's `ephemeral-storage` request keep pods within the disk. Contents are lost when the node is replaced, which is acceptable for these directories (5.1).
+Stroom node groups use instance types with local NVMe (the `d` families such as `r6id`, `m6id`, `c6id`, and `i4i`; amd64 only until the image architecture is known, S15). The AL2023 launch template sets `nodeadm`'s `localStorage: {strategy: RAID0}`, which builds a RAID0 array from the NVMe disks and puts kubelet and containerd on it, so `emptyDir` volumes and the container filesystem land on NVMe with no extra provisioner. `emptyDir` `sizeLimit` and the pod's `ephemeral-storage` request keep pods within the disk. Contents are lost when the node is replaced, which is acceptable for these directories (5.1).
 
 Not used: the local volume static provisioner (a local PV per pod, pinned to one node). More moving parts, and a pod could never move node.
 
@@ -207,7 +233,7 @@ Stroom's raw streams are the bucket's objects (S4):
 
 * the bucket's lifecycle expiry must be off, or longer than any Stroom data retention rule;
 * Stroom's data retention deletes only database rows; removing objects is S3's job (a lifecycle rule once both the Object Lock retention and Stroom's retention have passed);
-* the periods are set per environment (decided): `40-stroom` takes `raw_data_retention_days`, the longest Stroom retention rule for raw streams, and a precondition refuses a plan if the proxy stack's S3 expiry (`data_expire_after_retention`, `data_retention_days`, read from its outputs) would remove objects sooner. Stroom's retention rules themselves are set in Stroom.
+* the periods are set per environment (decided): `40-stroom` takes `raw_data_retention_days`, the longest Stroom retention rule for raw streams, and a precondition refuses a plan if the bucket's S3 expiry would remove objects sooner. The expiry comes from the proxy stack's outputs (`data_expire_after_retention`, `data_retention_days`), or, for a bucket managed elsewhere (4.4), from `ingest.expire_after_days` (null meaning no expiry). Stroom's retention rules themselves are set in Stroom.
 
 ### 7.4 IAM (Pod Identity role for the Stroom service account)
 
@@ -248,7 +274,7 @@ Decision: the proxy checks data against Stroom's receipt rules.
 ## 9. Access
 
 * **ALB (internal)**, a separate one from the proxy's, in the lb subnets, `:443` with an ACM certificate (same `tls_certificate_source` options as the proxy), and `:80` redirecting to 443.
-* Target group: `ip` targets, **HTTPS** to the pods' port 8443 (section 9.1). Health check over HTTP on the admin port 8081, `/stroomAdmin/ping` or a filtered healthcheck (S15) **(open: which)**. Stickiness: application cookie `STROOM_SESSION_ID`. Long idle timeout for WebSockets.
+* Target group: `ip` targets, **HTTPS** to the pods' port 8443 (section 9.1). Health check over HTTP on the admin port 8081, `/stroomAdmin/ping` or a filtered healthcheck (S15) **(open: which)**. Stickiness: application cookie `STROOM_SESSION_ID`. The ALB idle timeout covers the longest UI request (long searches, downloads); no WebSocket support is needed (S13).
 * Rules: `*clustercall.rpc` → 403 (S13); `/stroomAdmin*` is never routed (it's on 8081 anyway); `/datafeed*` → 403 in v1 (data comes through the proxy).
 * `TargetGroupBinding` points at the operator's `…-http` Service for the `ui` node set. The operator's own Ingress is disabled (`ingressEnabled: false`, S18).
 * Security group: 443 from `allowed_ingress_cidrs` (users' networks). Optional PrivateLink endpoint service via an NLB, as for the proxy (not in v1).
@@ -316,15 +342,19 @@ Each Stroom node has a node name that is unique, readable, and **permanent**: th
 
 ### 11.2 Nodes and sizing
 
-* **Node groups** (in `10-infra`, one per AZ per node set, labelled `workload=stroom`, `stroom/node-set=<name>`, tainted `workload=stroom:NoSchedule`):
+* **Node groups** (in `10-infra`, one per AZ that holds a pod of the node set, labelled `workload=stroom`, `stroom/node-set=<name>`, tainted `workload=stroom:NoSchedule`):
 
-| Node set | First (dev/test) cluster, decided | Pods |
-|---|---|---|
-| `proc` | `r6id.2xlarge` (8 vCPU, 64 GiB, 474 GB NVMe), 1 per AZ | 1 Stroom pod per node |
-| `ui` | `m6id.xlarge` (4 vCPU, 16 GiB, 237 GB NVMe), 1 in each of 2 AZs | 1 per node |
+**Bigger instances, fewer nodes** (decided): Stroom's heap defaults to **64 GiB** and can go higher, and instances have many cores and enough memory beyond the heap for direct memory and the LMDB page cache.
 
-  3 `proc` + 2 `ui` (decided for the first cluster; counts can only grow, 11.1). Instance types are a starting guess, since the docs give no sizing; production is sized from the current deployment's load **(open)**. Stroom alone needs 32 vCPU (3 × 8 + 2 × 4); with the system and proxy nodes the dev account's On-Demand vCPU quota (32 today) must go to about 64.
-* **Pods**: one per node (anti-affinity), memory request = limit. Heap about 40–50 % of the limit (`-Xmx` via `extraJvmOpts` or `memoryOptions`), leaving the rest for direct memory, LMDB page cache and the OS. Example for `r6id.2xlarge`: limit 56 GiB, heap 24 GiB.
+| Node set | First cluster (decided) | Memory | Pods |
+|---|---|---|---|
+| `proc` | 2 × `r6id.8xlarge` (32 vCPU, 256 GiB, 1 × 1.9 TB NVMe), in 2 AZs | limit 240 GiB, heap 64 GiB (up to about 96 GiB) | 1 Stroom pod per node |
+| `ui` | 1 × `r6id.4xlarge` (16 vCPU, 128 GiB, 1 × 950 GB NVMe) | limit 120 GiB, heap 64 GiB | 1 per node |
+
+  Counts can only grow (11.1), so the first cluster starts small and grows by adding nodes of the same size; production node counts and heap come from the current deployment's load **(open)**. Stroom alone needs 80 vCPU (2 × 32 + 16); with the system and proxy nodes the account's On-Demand vCPU quota (32 in the dev account today) must go to about 100.
+* **Single `ui` node**: the UI is unavailable while it restarts (config changes, node replacement) or if its AZ fails; processing and ingest carry on. A second `ui` node is the first thing to add if that matters.
+* **Pods**: one per node (anti-affinity), memory request = limit, CPU request close to the node's allocatable CPU. The heap (`-Xms` = `-Xmx`, via `extraJvmOpts`) is a fixed size rather than a percentage, so the rest of the limit is left for direct memory, LMDB's page cache (which counts against the pod's memory, S10) and the OS. Heaps over 32 GiB lose compressed object pointers, so 64 GiB holds less than twice what 32 GiB does; use Generational ZGC (`-XX:+UseZGC`, the default generational mode in Java 25) or G1, chosen by testing **(open)**.
+* The task autoscaler (S17) and per-node task limits use the cores: a 32-vCPU node runs many more processing tasks than the old default limits allow, so the starting task limits are part of sizing.
 * **EBS** `data` PVC per pod: gp3, size and IOPS per node set; one per AZ group so the pod always has a node in its volume's AZ.
 * **Probes**: a long startup probe (migrations hold a lock, S14); readiness on 8081.
 * **Jobs**: the `proc` node set runs all jobs including the S3 event poll; the `ui` set runs only the UI-side jobs (operator default: "Reindex Content").
@@ -372,8 +402,8 @@ allowed_ingress_cidrs   = ["10.0.0.0/8"]
 
 node_sets = {
   # count may only grow (11.1); node set names and node_name_prefix are permanent
-  proc = { count = 3, memory_limit = "56Gi", heap = "24g", cpu = 7, data_volume_gb = 500, jobs = "all" }
-  ui   = { count = 2, memory_limit = "14Gi", heap = "6g",  cpu = 3, data_volume_gb = 50,  jobs = "ui" }
+  proc = { count = 2, instance_type = "r6id.8xlarge", memory_limit = "240Gi", heap = "64g", cpu = 30, data_volume_gb = 1000, jobs = "all" }
+  ui   = { count = 1, instance_type = "r6id.4xlarge", memory_limit = "120Gi", heap = "64g", cpu = 14, data_volume_gb = 200,  jobs = "ui" }
 }
 
 stream_volume = { type = "efs" }               # s3_v1 tested later (5.3)
@@ -396,12 +426,15 @@ idp = {
 }
 
 ingest = {
-  queue_url = null                             # null → from 30-stroom-proxy remote state
-  dlq_url   = null
-  bucket    = null
+  # all null → from 30-stroom-proxy remote state; set them for a bucket managed elsewhere (4.4)
+  bucket            = null
+  queue_url         = null
+  dlq_url           = null
+  kms_key_arn       = null
+  expire_after_days = null                     # the bucket's lifecycle expiry; null = none (7.3)
 }
 
-proxy_api_key_secret_name = "stroom/dev/proxy-api-key"   # written by the bootstrap Job (5.4)
+proxy_api_key_secret_name = "stroom/dev/proxy-api-key"   # written by the bootstrap Job (5.4); null when there is no proxy in the cluster (4.4)
 ```
 
 And in `30-stroom-proxy`, for the second apply (4.3):
@@ -430,13 +463,14 @@ stroom_downstream = {
 | Stroom-Proxy → Stroom | Receipt policy (`RECEIPT_POLICY`), fallback `RECEIVE`, authenticated with a Stroom API key (8.1). |
 | TLS inside the cluster | HTTPS to the pods from the ALB, the proxy and other nodes (9.1). |
 | Node removal | Manual runbook only; nothing in Terraform relaxes the guards (11.1). |
-| First cluster | 3 `proc` + 2 `ui` (11.2). |
+| Sizing | Bigger instances, fewer nodes; heap 64 GiB or more. First cluster: 2 `proc` on `r6id.8xlarge` + 1 `ui` on `r6id.4xlarge` (11.2). |
 | Retention | Set per environment; the module checks the bucket expiry against Stroom's raw-stream retention (7.3). |
 | Terraform directory | Rename `terraform/aws-eks-proxy` to `terraform/aws-eks` (4.2). |
+| Deployment shapes | Proxy only, Stroom only (ingesting from a bucket managed elsewhere) or both, from the same stacks; Stroom additions to the shared stacks are gated (4.4). |
 
 ### 16.2 Open
 
-1. **Sizing for production**: node types, heap, EBS, EFS and RDS sizes from the current deployment's load (11.2).
+1. **Sizing for production**: node counts, heap above 64 GiB, garbage collector, task limits, EBS, EFS and RDS sizes from the current deployment's load (11.2).
 2. **Version upgrades**: can 7.14.x patch releases roll, or is stop-all always needed (S14)?
 3. **Health check** endpoint suitable for the ALB and readiness (9, S15).
 4. **Image architecture** of `gchq/stroom` (S15).
@@ -456,7 +490,7 @@ stroom_downstream = {
 0. **Groundwork**: merge upstream `gradata-systems/stroom-k8s-operator` `master` into the fork (S19), keeping fork #34; rename `terraform/aws-eks-proxy` to `terraform/aws-eks`; raise the Stroom issue for duplicate streams (S6).
 1. **Ingest spike** (early, since S1–S8 are beta code): a single Stroom pod in the dev cluster with a throwaway MySQL, the read-only volume and the queue, Pod Identity. Done when a proxy zip becomes a stream, a pipeline reads it, the DLQ path works, and the eTag and `EffectiveTime` questions (16.2.9, 16.2.10) are answered.
 2. **Operator changes** (10.2), with the upstream golden-file and `envtest` tests extended to cover them.
-3. **`10-infra` and `20-platform` additions**: Stroom node groups with NVMe RAID0, EFS CSI driver and StorageClass, cert-manager and trust-manager with the in-cluster CA, metrics-server, the operator and CRDs.
+3. **`10-infra` and `20-platform` additions**, all gated on `stroom_node_sets` (4.4): Stroom node groups with NVMe RAID0, EFS CSI driver and StorageClass, cert-manager and trust-manager with the in-cluster CA, metrics-server, the operator and CRDs; and `proxy_node_colours` allowed to be empty. `terraform test` cases for proxy-only, Stroom-only and both.
 4. **`modules/stroom-db`** and **`modules/stroom`** / `40-stroom`, and `stroom_downstream` in `30-stroom-proxy`: RDS and its init Job, EFS, ALB, certificate, Pod Identity, ExternalSecrets, `StroomCluster`, the bootstrap Job and key renewal CronJob, `terraform test` suites; first build in the order of 4.3. Done when users sign in through Entra ID, the `proc` set ingests from SQS, the `ui` set serves the UI behind the ALB with sticky sessions, `clustercall.rpc` and `/datafeed` are refused at the ALB, and the proxy fetches receipt rules from Stroom with its API key and keeps receiving while Stroom is stopped.
 5. **Operations**: version upgrade and node replacement runbooks, alarms (14), a dev test round like the proxy's (proxy design 15.1).
-6. **Later**: Keycloak and Cognito presets tested, PrivateLink for the UI, `S3_V1` stream volumes.
+6. **Later**: Keycloak and Cognito presets tested, PrivateLink for the UI (and so receipt rules for proxies outside the cluster), `S3_V1` stream volumes.
