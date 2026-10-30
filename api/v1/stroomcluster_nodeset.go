@@ -1,15 +1,20 @@
 package v1
 
-import corev1 "k8s.io/api/core/v1"
+import (
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
+)
 
 type NodeSet struct {
 	// Name uniquely identifies the NodeSet within a StroomCluster. Should be a short name like "prod".
 	//
 	// The NodeSet name determines the name of the Stroom node, which follows the format:
-	// `stroom-<cluster name>-node-<nodeset name>-<pod ordinal>`.
+	// `stroom-<cluster name>-node-<nodeset name>-<pod ordinal>`, or `<nodeNamePrefix>-<nodeset name>-<pod ordinal>`
+	// when the StroomCluster sets `nodeNamePrefix`.
 	//
 	// For example, the first Stroom node in StroomCluster `dev`, NodeSet `data` will be named:
 	// `stroom-dev-node-data-0`.
+	// +kubebuilder:validation:MaxLength=30
 	Name string `json:"name"`
 	// Number of replicas (discrete Stroom nodes) to deploy in the NodeSet
 	// +kubebuilder:validation:Minimum=1
@@ -65,6 +70,19 @@ type NodeSet struct {
 	NodeSelector map[string]string   `json:"nodeSelector,omitempty"`
 	Tolerations  []corev1.Toleration `json:"tolerations,omitempty"`
 	Affinity     corev1.Affinity     `json:"affinity,omitempty"`
+	// TopologySpreadConstraints spread the NodeSet's Pods, for example across availability zones. A constraint
+	// without a labelSelector selects the NodeSet's own Pods.
+	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
+	// PodDisruptionBudget, if set, creates a PodDisruptionBudget for the NodeSet's Pods, so that voluntary disruptions
+	// such as node drains stop only so many Stroom nodes at once.
+	PodDisruptionBudget *PodDisruptionBudgetSettings `json:"podDisruptionBudget,omitempty"`
+}
+
+type PodDisruptionBudgetSettings struct {
+	// MaxUnavailable is the number or percentage of the NodeSet's Pods that may be unavailable at once
+	// +kubebuilder:default:=1
+	// +kubebuilder:validation:XIntOrString
+	MaxUnavailable *intstr.IntOrString `json:"maxUnavailable,omitempty"`
 }
 
 type JvmMemoryOptions struct {

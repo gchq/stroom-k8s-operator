@@ -1,0 +1,60 @@
+# A fixed-size StroomCluster with its own node names, spread across zones, with disruption budgets
+apiVersion: stroom.gchq.github.io/v1
+kind: DatabaseServer
+metadata:
+  name: fixed-size
+spec:
+  image:
+    repository: mysql/mysql-server
+  databaseNames:
+    - stroom
+    - stats
+  resources: {}
+  volumeClaim: {}
+---
+apiVersion: stroom.gchq.github.io/v1
+kind: StroomCluster
+metadata:
+  name: fixed-size
+spec:
+  image:
+    repository: gchq/stroom
+    tag: v7.14.0
+  databaseServerRef:
+    serverRef:
+      name: fixed-size
+  openId:
+    clientId: stroom
+    clientSecret:
+      secretName: stroom-openid
+      key: client-secret
+  ingress:
+    hostName: stroom.example.com
+  nodeNamePrefix: stroom-dev
+  preventNodeRemoval: true
+  nodeSets:
+    - name: proc
+      count: 2
+      role: Processing
+      ingressEnabled: false
+      localDataVolumeClaim: {}
+      resources: {}
+      memoryOptions:
+        initialPercentage: 50
+        maxPercentage: 75
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+      podDisruptionBudget: {}
+    - name: ui
+      count: 1
+      role: Frontend
+      ingressEnabled: false
+      localDataVolumeClaim: {}
+      resources: {}
+      memoryOptions:
+        initialPercentage: 50
+        maxPercentage: 75
+      podDisruptionBudget:
+        maxUnavailable: 1

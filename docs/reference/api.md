@@ -220,6 +220,21 @@ _Appears in:_ [StroomClusterSpec](#stroomclusterspec)
 | `tlsKeystorePasswordSecret` _[SecretItem](#secretitem)_ | Password of the keystore and truststore |  |  |
 
 
+### IdentityProviderType
+
+_Underlying type:_ string
+
+
+
+
+_Appears in:_ [StroomClusterSpec](#stroomclusterspec)
+
+| Value | Description |
+| --- | --- |
+| `INTERNAL_IDP` |  |
+| `EXTERNAL_IDP` |  |
+
+
 ### Image
 
 
@@ -332,7 +347,7 @@ _Appears in:_ [StroomClusterSpec](#stroomclusterspec)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `name` _string_ | Name uniquely identifies the NodeSet within a StroomCluster. Should be a short name like "prod".<br />The NodeSet name determines the name of the Stroom node, which follows the format:<br />`stroom-<cluster name>-node-<nodeset name>-<pod ordinal>`.<br />For example, the first Stroom node in StroomCluster `dev`, NodeSet `data` will be named:<br />`stroom-dev-node-data-0`. |  |  |
+| `name` _string_ | Name uniquely identifies the NodeSet within a StroomCluster. Should be a short name like "prod".<br />The NodeSet name determines the name of the Stroom node, which follows the format:<br />`stroom-<cluster name>-node-<nodeset name>-<pod ordinal>`, or `<nodeNamePrefix>-<nodeset name>-<pod ordinal>`<br />when the StroomCluster sets `nodeNamePrefix`.<br />For example, the first Stroom node in StroomCluster `dev`, NodeSet `data` will be named:<br />`stroom-dev-node-data-0`. |  | MaxLength: 30 |
 | `count` _integer_ | Number of replicas (discrete Stroom nodes) to deploy in the NodeSet |  | Minimum: 1 |
 | `role` _[NodeRole](#noderole)_ | Role of each node in the NodeSet. `Processing` nodes receive and process data, while `Frontend` nodes serve<br />the Stroom user interface and API.<br />If this property is omitted, nodes in the NodeSet will assume both Processing and Frontend roles. |  | Enum: [Processing Frontend] |
 | `managedJobs` _string array_ | Automatically enable the specified job(s) on node startup and disable them prior to node shutdown.<br />If omitted, nodes with the `Processing` role or no role enable and disable all jobs, while `Frontend` nodes<br />only manage the job `Reindex Content`.<br />Jobs that aren't managed may be enabled or disabled via the Stroom Jobs pane. |  |  |
@@ -352,6 +367,8 @@ _Appears in:_ [StroomClusterSpec](#stroomclusterspec)
 | `nodeSelector` _object (keys:string, values:string)_ | NodeSelector allows for NodeSet Pods to be deployed to a particular node, or set of nodes, by the specified labels |  |  |
 | `tolerations` _[Toleration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#toleration-v1-core) array_ |  |  |  |
 | `affinity` _[Affinity](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#affinity-v1-core)_ |  |  |  |
+| `topologySpreadConstraints` _[TopologySpreadConstraint](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#topologyspreadconstraint-v1-core) array_ | TopologySpreadConstraints spread the NodeSet's Pods, for example across availability zones. A constraint<br />without a labelSelector selects the NodeSet's own Pods. |  |  |
+| `podDisruptionBudget` _[PodDisruptionBudgetSettings](#poddisruptionbudgetsettings)_ | PodDisruptionBudget, if set, creates a PodDisruptionBudget for the NodeSet's Pods, so that voluntary disruptions<br />such as node drains stop only so many Stroom nodes at once. |  |  |
 
 
 ### OpenIdConfiguration
@@ -366,6 +383,19 @@ _Appears in:_ [StroomClusterSpec](#stroomclusterspec)
 | --- | --- | --- | --- |
 | `clientId` _string_ | Name of the OpenID client |  |  |
 | `clientSecret` _[SecretItem](#secretitem)_ | Details of the Secret containing the OpenID client secret |  |  |
+
+
+### PodDisruptionBudgetSettings
+
+
+
+
+
+_Appears in:_ [NodeSet](#nodeset)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `maxUnavailable` _[IntOrString](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#intorstring-intstr-util)_ | MaxUnavailable is the number or percentage of the NodeSet's Pods that may be unavailable at once | `1` | XIntOrString |
 
 
 ### ProbeTimings
@@ -483,13 +513,17 @@ _Appears in:_ [StroomCluster](#stroomcluster)
 | `appDatabaseName` _string_ | Name of the main Stroom database, usually `stroom` | `stroom` | Pattern: `^[A-Za-z0-9_]{1,64}$` |
 | `statsDatabaseName` _string_ | Name of the statistics database, usually `stats` | `stats` | Pattern: `^[A-Za-z0-9_]{1,64}$` |
 | `configMapRef` _[ConfigMapRef](#configmapref)_ | Override the Stroom configuration provided to each node, by providing the name of an existing `ConfigMap`<br />in the same namespace as the `StroomCluster` |  |  |
-| `openId` _[OpenIdConfiguration](#openidconfiguration)_ | Configures OpenID to enable operator components to query the Stroom API |  |  |
+| `openId` _[OpenIdConfiguration](#openidconfiguration)_ | Configures OpenID to enable operator components to query the Stroom API - Only needed with EXTERNAL_IDP |  | Optional |
+| `identityProviderType` _[IdentityProviderType](#identityprovidertype)_ | INTERNAL_IDP means the operator creates and manages an API key; EXTERNAL_IDP requires openId | `INTERNAL_IDP` | Enum: [INTERNAL_IDP EXTERNAL_IDP] |
 | `https` _[HttpsSettings](#httpssettings)_ | HTTPS settings. Omit to use plain-text (HTTP) |  | Optional |
 | `ingress` _[IngressSettings](#ingresssettings)_ |  |  | Required |
+| `nodeNamePrefix` _string_ | NodeNamePrefix replaces the default `stroom-<cluster name>-node` prefix of the NodeSets' StatefulSet, Service and<br />Pod names, and so of the Stroom node names: with prefix `stroom-prod`, the first node of NodeSet `proc` is<br />`stroom-prod-proc-0`. It can't be changed once the StroomCluster exists, as Stroom keys a node's index volumes,<br />jobs and other state by its name. |  | MaxLength: 40<br />Optional<br />Pattern: `^[a-z]([-a-z0-9]*[a-z0-9])?$` |
+| `preventNodeRemoval` _boolean_ | PreventNodeRemoval refuses any change that would remove a Stroom node: a NodeSet's count going down, or a NodeSet<br />being removed or renamed. Stroom nodes own their index shards, so a node can't be removed without first moving or<br />deleting its data. To remove a node deliberately, set this to false in a separate update first. |  | Optional |
+| `stopped` _boolean_ | Stopped scales every NodeSet to zero Pods, each node draining its tasks first, without changing the NodeSets'<br />counts. Used to stop the whole cluster, for example for a Stroom version upgrade. PVCs are kept whatever the<br />volumeClaimDeletePolicy. |  | Optional |
 | `podManagementPolicy` _[PodManagementPolicyType](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#podmanagementpolicytype-v1-apps)_ | Pod management policy to use when deploying or scaling the StroomCluster |  |  |
 | `nodeTerminationPeriodSecs` _integer_ | Amount of time granted to nodes to drain their active tasks before being terminated | `60` |  |
 | `volumeClaimDeletePolicy` _[VolumeClaimDeletePolicy](#volumeclaimdeletepolicy)_ | Delete Stroom node `PersistentVolumeClaim`s in accordance with this policy |  | Enum: [DeleteOnScaledownAndClusterDeletion DeleteOnScaledownOnly] |
-| `nodeSets` _[NodeSet](#nodeset) array_ | Each NodeSet is a functional grouping of Stroom nodes with a particular role, within the cluster.<br />It is recommended two NodeSets should be provided: one for storing and processing data and a separate one for<br />serving the Stroom front-end. |  | MinItems: 1 |
+| `nodeSets` _[NodeSet](#nodeset) array_ | Each NodeSet is a functional grouping of Stroom nodes with a particular role, within the cluster.<br />It is recommended two NodeSets should be provided: one for storing and processing data and a separate one for<br />serving the Stroom front-end. |  | MaxItems: 20<br />MinItems: 1 |
 | `extraJvmOpts` _string array_ | Additional Java Virtual Machine (JVM) options to use. Example of a valid entry: `-Xms1g` |  |  |
 | `extraEnv` _[EnvVar](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#envvar-v1-core) array_ | Additional environment variables provided to each NodeSet pod |  |  |
 | `extraVolumes` _[Volume](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#volume-v1-core) array_ | Additional volumes to be mounted in each NodeSet pod |  |  |

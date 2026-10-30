@@ -1,0 +1,29 @@
+data:
+  create-service-user.sql: |-
+    -- Create a service user for determining MySQL health
+    CREATE USER 'healthcheck'@'localhost';
+  init-stroom-db.sql: |-
+    -- Initialise Stroom databases
+    CREATE DATABASE IF NOT EXISTS `stroom`;
+    GRANT ALL PRIVILEGES ON `stroom`.* TO 'stroomuser'@'%';
+    CREATE DATABASE IF NOT EXISTS `stats`;
+    GRANT ALL PRIVILEGES ON `stats`.* TO 'stroomuser'@'%';
+
+
+    SELECT 'Dumping list of databases' AS '';
+    SELECT '---------------------------------------' AS '';
+    SHOW databases;
+metadata:
+  labels:
+    app.kubernetes.io/component: database-server
+    app.kubernetes.io/instance: fixed-size
+    app.kubernetes.io/name: stroom
+  name: stroom-fixed-size-db-init
+  namespace: golden-fixed-size
+  ownerReferences:
+  - apiVersion: stroom.gchq.github.io/v1
+    blockOwnerDeletion: true
+    controller: true
+    kind: DatabaseServer
+    name: fixed-size
+    uid: <uid>

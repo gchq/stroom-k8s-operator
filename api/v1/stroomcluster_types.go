@@ -60,8 +60,20 @@ func (in *StroomCluster) GetApiKeyWriterRoleName() string {
 	return fmt.Sprintf("%v-api-key-writer", in.GetBaseName())
 }
 
+// GetNodeSetName returns the name of a NodeSet's StatefulSet, which prefixes its Pod and so Stroom node names
 func (in *StroomCluster) GetNodeSetName(nodeSet *NodeSet) string {
+	if in.Spec.NodeNamePrefix != "" {
+		return fmt.Sprintf("%v-%v", in.Spec.NodeNamePrefix, nodeSet.Name)
+	}
 	return fmt.Sprintf("%v-node-%v", in.GetBaseName(), nodeSet.Name)
+}
+
+// GetNodeSetReplicas returns how many Pods a NodeSet should run: none while the cluster is stopped
+func (in *StroomCluster) GetNodeSetReplicas(nodeSet *NodeSet) int32 {
+	if in.Spec.Stopped {
+		return 0
+	}
+	return nodeSet.Count
 }
 
 func (in *StroomCluster) GetLogSenderConfigMapName() string {

@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- `spec.nodeNamePrefix` sets the prefix of the NodeSets' StatefulSet, Service and so Stroom node names, in place of
+  `stroom-<cluster>-node`: prefix `stroom-prod` and NodeSet `proc` give nodes `stroom-prod-proc-0`, …. It can't be
+  added, changed or removed once the StroomCluster exists. Unset, names are as before.
+- `spec.preventNodeRemoval` refuses any update that lowers a NodeSet's count or removes or renames a NodeSet, as Stroom
+  nodes own their index shards. It applies to the update that turns it off as well, so removing a node takes two
+  updates.
+- `spec.stopped` scales every NodeSet to zero, each node draining first, without changing the counts, for example for
+  a Stroom version upgrade. PVCs are kept while stopped, whatever the `volumeClaimDeletePolicy`.
+- NodeSets can set `topologySpreadConstraints` (a constraint without a label selector selects the NodeSet's own Pods)
+  and `podDisruptionBudget` (`maxUnavailable`, default 1), which creates a PodDisruptionBudget for the NodeSet. The
+  operator's ClusterRole gains PodDisruptionBudget permissions.
+- NodeSet names are limited to 30 characters and a StroomCluster to 20 NodeSets, to keep the API server's validation
+  cost bounded. Existing longer names are kept while unchanged.
+
 ## 2.0.0
 
 This is the `gchq/stroom-k8s-operator` fork. It merges upstream `gradata-systems/stroom-k8s-operator` 1.2.0-beta.1

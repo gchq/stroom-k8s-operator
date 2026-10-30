@@ -1,0 +1,25 @@
+metadata:
+  labels:
+    app.kubernetes.io/component: stroom-cluster
+    app.kubernetes.io/name: stroom
+    stroom/cluster: fixed-size
+  name: stroom-dev-ui
+  namespace: golden-fixed-size
+  ownerReferences:
+  - apiVersion: stroom.gchq.github.io/v1
+    blockOwnerDeletion: true
+    controller: true
+    kind: StroomCluster
+    name: fixed-size
+    uid: <uid>
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      stroom/cluster: fixed-size
+      stroom/nodeSet: ui
+status:
+  currentHealthy: 0
+  desiredHealthy: 0
+  disruptionsAllowed: 0
+  expectedPods: 0

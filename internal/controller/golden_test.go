@@ -127,6 +127,9 @@ func renderFixture(objects []client.Object) map[string]client.Object {
 				add(stroomClusterReconciler.createStatefulSet(resource, nodeSet, dbInfo))
 				add(stroomClusterReconciler.createService(resource, nodeSet, resource.GetNodeSetHeadlessServiceName(nodeSet), corev1.ClusterIPNone))
 				add(stroomClusterReconciler.createService(resource, nodeSet, resource.GetNodeSetServiceName(nodeSet), ""))
+				if pdb := stroomClusterReconciler.createPodDisruptionBudget(resource, nodeSet); pdb != nil {
+					add(pdb)
+				}
 			}
 			for _, ingress := range stroomClusterReconciler.createIngresses(context.Background(), resource) {
 				add(&ingress)

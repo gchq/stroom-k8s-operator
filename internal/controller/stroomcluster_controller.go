@@ -32,6 +32,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -68,6 +69,7 @@ var StaticFiles embed.FS
 //+kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;delete
 //+kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
@@ -265,6 +267,10 @@ func (r *StroomClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			return ctrl.Result{}, err
 		}
 		logger.Info("ClusterIP service reconciled", "Result", operationResult, "Namespace", existingService.Namespace, "Name", existingService.Name)
+
+		if err := r.reconcilePodDisruptionBudget(ctx, &stroomCluster, &nodeSet); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	ingresses := r.createIngresses(ctx, &stroomCluster)
@@ -320,10 +326,54 @@ func (r *StroomClusterReconciler) reconcileNodeStatefulSet(ctx context.Context, 
 		return err
 	}
 	logger.Info("StatefulSet reconciled", "Result", operationResult, "Namespace", existingStatefulSet.Namespace, "Name", existingStatefulSet.Name)
-	if operationResult == controllerutil.OperationResultUpdated {
-		// StatefulSet may have been scaled down, so delete excess PVCs, depending on deletion policy
+	if operationResult == controllerutil.OperationResultUpdated && !stroomCluster.Spec.Stopped {
+		// StatefulSet may have been scaled down, so delete excess PVCs, depending on deletion policy. A stopped
+		// cluster keeps them all, as its nodes will start again.
 		return r.deletePvcs(ctx, stroomCluster, nodeSet, oldReplicaCount, *newStatefulSet.Spec.Replicas)
 	}
+	return nil
+}
+
+// reconcilePodDisruptionBudget creates or updates a NodeSet's PodDisruptionBudget, or deletes it if the NodeSet no
+// longer asks for one
+func (r *StroomClusterReconciler) reconcilePodDisruptionBudget(ctx context.Context, stroomCluster *stroomv1.StroomCluster, nodeSet *stroomv1.NodeSet) error {
+	logger := log.FromContext(ctx)
+
+	newPdb := r.createPodDisruptionBudget(stroomCluster, nodeSet)
+	if newPdb == nil {
+		existingPdb := policyv1.PodDisruptionBudget{}
+		err := r.Get(ctx, types.NamespacedName{Namespace: stroomCluster.Namespace, Name: stroomCluster.GetNodeSetName(nodeSet)}, &existingPdb)
+		if errors.IsNotFound(err) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+		if !metav1.IsControlledBy(&existingPdb, stroomCluster) {
+			return nil
+		}
+		if err := r.Delete(ctx, &existingPdb); client.IgnoreNotFound(err) != nil {
+			return err
+		}
+		logger.Info("PodDisruptionBudget deleted", "Namespace", existingPdb.Namespace, "Name", existingPdb.Name)
+		return nil
+	}
+
+	existingPdb := policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      newPdb.Name,
+			Namespace: newPdb.Namespace,
+		},
+	}
+	operationResult, err := controllerutil.CreateOrUpdate(ctx, r.Client, &existingPdb, func() error {
+		existingPdb.Labels = newPdb.Labels
+		existingPdb.OwnerReferences = newPdb.OwnerReferences
+		existingPdb.Spec = newPdb.Spec
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	logger.Info("PodDisruptionBudget reconciled", "Result", operationResult, "Namespace", existingPdb.Namespace, "Name", existingPdb.Name)
 	return nil
 }
 
@@ -686,6 +736,7 @@ func (r *StroomClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&stroomv1.StroomCluster{}).
 		Owns(&appsv1.StatefulSet{}).
+		Owns(&policyv1.PodDisruptionBudget{}).
 		Owns(&batchv1.Job{}).
 		Owns(&corev1.Secret{}).
 		Complete(r)

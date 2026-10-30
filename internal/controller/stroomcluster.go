@@ -13,6 +13,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -490,6 +491,7 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 		containers = append(containers, r.createLogSenderContainer(stroomCluster))
 	}
 
+	replicas := stroomCluster.GetNodeSetReplicas(nodeSet)
 	statefulSet := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      stroomCluster.GetNodeSetName(nodeSet),
@@ -497,7 +499,7 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 			Labels:    stroomCluster.GetLabels(),
 		},
 		Spec: appsv1.StatefulSetSpec{
-			Replicas:            &nodeSet.Count,
+			Replicas:            &replicas,
 			PodManagementPolicy: stroomCluster.Spec.PodManagementPolicy,
 			ServiceName:         stroomCluster.GetNodeSetHeadlessServiceName(nodeSet),
 			Selector: &metav1.LabelSelector{
@@ -519,6 +521,7 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 					NodeSelector:                  nodeSet.NodeSelector,
 					Affinity:                      &nodeSet.Affinity,
 					Tolerations:                   nodeSet.Tolerations,
+					TopologySpreadConstraints:     topologySpreadConstraints(stroomCluster, nodeSet),
 				},
 			},
 			VolumeClaimTemplates: []corev1.PersistentVolumeClaim{{
@@ -533,6 +536,50 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 
 	ctrl.SetControllerReference(stroomCluster, statefulSet, r.Scheme)
 	return statefulSet
+}
+
+// topologySpreadConstraints returns the NodeSet's topology spread constraints, selecting the NodeSet's own Pods
+// where a constraint has no label selector
+func topologySpreadConstraints(stroomCluster *stroomv1.StroomCluster, nodeSet *stroomv1.NodeSet) []corev1.TopologySpreadConstraint {
+	if len(nodeSet.TopologySpreadConstraints) == 0 {
+		return nil
+	}
+	constraints := make([]corev1.TopologySpreadConstraint, len(nodeSet.TopologySpreadConstraints))
+	for i, constraint := range nodeSet.TopologySpreadConstraints {
+		constraint = *constraint.DeepCopy()
+		if constraint.LabelSelector == nil {
+			constraint.LabelSelector = &metav1.LabelSelector{MatchLabels: stroomCluster.GetNodeSetSelectorLabels(nodeSet)}
+		}
+		constraints[i] = constraint
+	}
+	return constraints
+}
+
+// createPodDisruptionBudget returns the PodDisruptionBudget for a NodeSet's Pods, or nil if the NodeSet doesn't ask
+// for one
+func (r *StroomClusterReconciler) createPodDisruptionBudget(stroomCluster *stroomv1.StroomCluster, nodeSet *stroomv1.NodeSet) *policyv1.PodDisruptionBudget {
+	if nodeSet.PodDisruptionBudget == nil {
+		return nil
+	}
+	maxUnavailable := intstr.FromInt32(1)
+	if nodeSet.PodDisruptionBudget.MaxUnavailable != nil {
+		maxUnavailable = *nodeSet.PodDisruptionBudget.MaxUnavailable
+	}
+	pdb := &policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      stroomCluster.GetNodeSetName(nodeSet),
+			Namespace: stroomCluster.Namespace,
+			Labels:    stroomCluster.GetLabels(),
+		},
+		Spec: policyv1.PodDisruptionBudgetSpec{
+			MaxUnavailable: &maxUnavailable,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: stroomCluster.GetNodeSetSelectorLabels(nodeSet),
+			},
+		},
+	}
+	ctrl.SetControllerReference(stroomCluster, pdb, r.Scheme)
+	return pdb
 }
 
 func (r *StroomClusterReconciler) createLogSenderContainer(stroomCluster *stroomv1.StroomCluster) corev1.Container {
