@@ -46,12 +46,17 @@
       "wantClientAuth" false
       "disableSniHostCheck" true }}
 
+{{- /* Forwarded headers are ignored on every connector. The ALB removes a
+       sender's X-Forwarded-For (F19) but passes Forwarded, X-Forwarded-Host,
+       X-Forwarded-Server and X-Proxied-Https through, and Jetty would let them
+       set the client address the proxy records (RemoteAddress, the request
+       log) and the request's host and scheme. The proxy needs none of them. */}}
 {{- $server := dict
       "applicationContextPath" "/"
       "adminContextPath" "/proxyAdmin"
       "shutdownGracePeriod" (printf "%ds" (int .Values.drain.shutdownGracePeriodSeconds))
       "applicationConnectors" (list
-        (merge (dict "port" .Values.ports.https "useForwardedHeaders" true) $https)
+        (merge (dict "port" .Values.ports.https "useForwardedHeaders" false) $https)
         (merge (dict "port" .Values.ports.local "bindHost" "127.0.0.1" "useForwardedHeaders" false) $https))
       "adminConnectors" (list (dict "type" "http" "port" .Values.ports.admin))
       "requestLog" (dict "appenders" $requestLogAppenders) }}
@@ -79,13 +84,18 @@
 {{- /* A forward destination without "enabled" is enabled for HTTP but
        disabled for file and S3 destinations (their JSON constructors default
        it to false). Make every destination enabled unless it says otherwise,
-       and count them: the proxy refuses to start without one. */}}
+       and count them: the proxy refuses to start without one. Only a missing
+       (or null) "enabled" is set: merge would also replace "enabled: false",
+       as it treats false as empty. */}}
 {{- $enabledDestinations := 0 }}
 {{- range $kind := list "forwardHttpDestinations" "forwardFileDestinations" "forwardS3Destinations" }}
 {{- $destinations := list }}
 {{- range $destination := (get $proxyConfig $kind | default list) }}
-{{- $destination = merge (deepCopy $destination) (dict "enabled" true) }}
-{{- if $destination.enabled }}
+{{- $destination = deepCopy $destination }}
+{{- if kindIs "invalid" $destination.enabled }}
+{{- $_ := set $destination "enabled" true }}
+{{- end }}
+{{- if eq (toString $destination.enabled) "true" }}
 {{- $enabledDestinations = add1 $enabledDestinations }}
 {{- end }}
 {{- $destinations = append $destinations $destination }}

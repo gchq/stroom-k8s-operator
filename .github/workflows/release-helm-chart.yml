@@ -3,34 +3,45 @@ name: Release Helm Chart
 on:
   workflow_dispatch:
 
+# Read the repository; push the charts to GHCR.
+permissions:
+  contents: read
+  packages: write
+
 env:
   REGISTRY: ghcr.io
   NAMESPACE: gchq
+  HELM_VERSION: v3.22.1
 
-jobs:    
+jobs:
     build_and_release_helm_chart:
       runs-on: ubuntu-latest
       steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
-      - name: Install Helm
-        uses: azure/setup-helm@v3.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          version: v3.9.0
+          persist-credentials: false
+      - name: Install Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: ${{ env.HELM_VERSION }}
       - name: Helm repo login
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          helm registry login ${{ env.REGISTRY }} --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }}
+          echo "${REGISTRY_PASSWORD}" | helm registry login "${REGISTRY}" --username "${REGISTRY_USER}" --password-stdin
       - name: Build and push stroom-operator-crds chart
         run: |
           tar_path=$(helm package ./charts/stroom-operator-crds | sed -E 's/^.+ saved it to: (.+)$/\1/')
-          helm push "$tar_path" oci://${{ env.REGISTRY }}/${{ env.NAMESPACE }}/helm-charts
+          helm push "$tar_path" "oci://${REGISTRY}/${NAMESPACE}/helm-charts"
 
       - name: Build and push stroom-operator chart
         run: |
           tar_path=$(helm package ./charts/stroom-operator | sed -E 's/^.+ saved it to: (.+)$/\1/')
-          helm push "$tar_path" oci://${{ env.REGISTRY }}/${{ env.NAMESPACE }}/helm-charts
+          helm push "$tar_path" "oci://${REGISTRY}/${NAMESPACE}/helm-charts"
 
       - name: Build and push stroom-proxy chart
         run: |
           tar_path=$(helm package ./charts/stroom-proxy | sed -E 's/^.+ saved it to: (.+)$/\1/')
-          helm push "$tar_path" oci://${{ env.REGISTRY }}/${{ env.NAMESPACE }}/helm-charts
+          helm push "$tar_path" "oci://${REGISTRY}/${NAMESPACE}/helm-charts"

@@ -140,6 +140,13 @@ resource "aws_vpc_security_group_egress_rule" "alb_to_pods" {
 
 # Pods use the node security group (VPC CNI). The NetworkPolicy further limits
 # them to traffic from the lb subnets.
+#
+# Known limit: rules on the shared node security group open a port to every
+# pod and node using it, not just the proxies. 8443 here is also Stroom's
+# port, so a Stroom ALB (modules/stroom) opening 8443 to the node group lets
+# that ALB reach the proxy pods on 8443 too, and the proxy NetworkPolicy
+# still admits it because it sits in the same lb subnets. See the comment on
+# kubernetes_network_policy_v1.proxy and the design, section 14.
 resource "aws_vpc_security_group_ingress_rule" "pods_from_alb" {
   for_each = local.ports
 
@@ -166,7 +173,8 @@ resource "aws_lb" "alb" {
   drop_invalid_header_fields = true
   # Remove X-Forwarded-For rather than append to it: Jetty takes the leftmost
   # entry, which a client could forge (F19). ALB access logs keep the real
-  # client addresses.
+  # client addresses. The chart also turns Jetty's forwarded-header handling
+  # off, as the ALB passes Forwarded and X-Forwarded-Host/-Server through.
   xff_header_processing_mode = "remove"
 
   dynamic "access_logs" {
@@ -397,6 +405,91 @@ resource "aws_lb_listener_rule" "test_plain_reject_dn_headers" {
     fixed_response {
       content_type = "text/plain"
       message_body = "Client certificate headers are not accepted on this endpoint."
+      status_code  = "403"
+    }
+  }
+
+  tags = var.tags
+}
+
+################################################################################
+# Meta the proxy should set, not senders (section 5.3)
+#
+# The proxy copies every request header and query string parameter into the
+# stored meta. Behind the ALB it never sets RemoteDN or RemoteCertExpiry itself
+# (F21; X-SSL-Client-V-End is turned into RemoteCertExpiry), and it keeps a
+# sender's RemoteAddress and RemoteHost when the sender also sends a GUID. So
+# a sender could write a false certificate identity or address into the meta
+# that Stroom stores and receipt rules match on. Refuse them on every
+# listener, as headers and as query string parameters. One header per rule
+# (an http_header condition takes one name); the query string rule uses all 5
+# condition values a rule allows.
+################################################################################
+
+locals {
+  client_meta_keys = ["RemoteDN", "RemoteCertExpiry", "X-SSL-Client-V-End", "RemoteAddress", "RemoteHost"]
+
+  # Every listener: main and test, mTLS and plain.
+  meta_rejecting_listeners = !var.alb_reject_client_meta ? {} : merge(
+    { plain = aws_lb_listener.plain.arn },
+    { for l in aws_lb_listener.mtls : "mtls" => l.arn },
+    { for k, l in aws_lb_listener.test : "test_${k}" => l.arn },
+  )
+}
+
+resource "aws_lb_listener_rule" "reject_client_meta_headers" {
+  for_each = {
+    for pair in setproduct(keys(local.meta_rejecting_listeners), range(length(local.client_meta_keys))) :
+    "${pair[0]}/${local.client_meta_keys[pair[1]]}" => {
+      listener = pair[0]
+      header   = local.client_meta_keys[pair[1]]
+      priority = 10 + pair[1]
+    }
+  }
+
+  listener_arn = local.meta_rejecting_listeners[each.value.listener]
+  priority     = each.value.priority
+
+  condition {
+    http_header {
+      http_header_name = each.value.header
+      values           = ["*"]
+    }
+  }
+
+  action {
+    type = "fixed-response"
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "${each.value.header} is set by the proxy and is not accepted from senders."
+      status_code  = "403"
+    }
+  }
+
+  tags = var.tags
+}
+
+resource "aws_lb_listener_rule" "reject_client_meta_query" {
+  for_each = local.meta_rejecting_listeners
+
+  listener_arn = each.value
+  priority     = 10 + length(local.client_meta_keys)
+
+  condition {
+    dynamic "query_string" {
+      for_each = local.client_meta_keys
+      content {
+        key   = query_string.value
+        value = "*"
+      }
+    }
+  }
+
+  action {
+    type = "fixed-response"
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "${join(", ", local.client_meta_keys)} are set by the proxy and are not accepted from senders."
       status_code  = "403"
     }
   }

@@ -212,9 +212,12 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
+          # Only whether Jetty answers: a failing health check (S3 or a
+          # downstream unreachable) makes pods unready, but restarting them
+          # wouldn't fix it, and would restart every pod at once.
           livenessProbe:
             httpGet:
-              path: {{ .Values.healthCheckPath | quote }}
+              path: {{ .Values.livenessCheckPath | quote }}
               port: admin
             periodSeconds: 30
             timeoutSeconds: 10

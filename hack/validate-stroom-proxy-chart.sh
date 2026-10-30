@@ -50,6 +50,33 @@ print("\n".join(out))
 '
 }
 
+# Print "<kind> <name> <enabled>" for each forward destination in a rendered
+# config.yml (toYaml output: list items at the same indent as their key).
+destination_flags() {
+  python3 -c '
+import sys
+kinds = ("forwardHttpDestinations", "forwardFileDestinations", "forwardS3Destinations")
+kind, kind_indent, current, items = None, 0, None, []
+for line in sys.stdin.read().splitlines():
+    text = line.strip()
+    indent = len(line) - len(line.lstrip())
+    if kind:
+        if indent == kind_indent and text.startswith("- "):
+            current = {}
+            items.append((kind, current))
+            text, indent = text[2:], indent + 2
+        elif not text or indent <= kind_indent:
+            kind = None
+        if kind and indent == kind_indent + 2 and ":" in text:
+            key, _, value = text.partition(":")
+            current[key] = value.strip()
+    if not kind and text.endswith(":") and text[:-1] in kinds:
+        kind, kind_indent, current = text[:-1], indent, None
+for kind, item in sorted(items):
+    print(kind, item.get("name"), item.get("enabled"))
+'
+}
+
 "${helm}" lint "${chart}" --strict --values "${chart}/ci/default-values.yaml"
 
 failed=0
@@ -75,6 +102,35 @@ for values in "${chart}"/ci/*.yaml; do
     failed=1
   fi
 done
+
+# "enabled: false" must survive rendering; only a missing "enabled" becomes
+# true (sprig's merge would turn false into true as well).
+echo "=== forward destination enabled flags"
+expected_flags="forwardFileDestinations local true
+forwardHttpDestinations disabled-http false
+forwardS3Destinations disabled-s3 false"
+actual_flags="$(destination_flags < "${work_dir}/disabled-destinations-values-config.yml")"
+if [ "${actual_flags}" = "${expected_flags}" ]; then
+  echo "flags OK"
+else
+  printf 'flags WRONG, expected:\n%s\ngot:\n%s\n' "${expected_flags}" "${actual_flags}"
+  failed=1
+fi
+
+# With every destination disabled the chart must refuse to render.
+printf 'proxyConfig:\n  forwardFileDestinations:\n    - name: local\n      path: /tmp/forward\n      enabled: false\n' \
+  > "${work_dir}/all-disabled.yaml"
+if "${helm}" template ci "${chart}" --kube-version "${kube_version}" --values "${work_dir}/all-disabled.yaml" \
+    > /dev/null 2> "${work_dir}/all-disabled.log"; then
+  echo "all destinations disabled: rendered, but should have failed"
+  failed=1
+elif grep -q 'needs at least one enabled forward destination' "${work_dir}/all-disabled.log"; then
+  echo "all destinations disabled: refused OK"
+else
+  echo "all destinations disabled: failed for another reason:"
+  cat "${work_dir}/all-disabled.log"
+  failed=1
+fi
 
 # Boot test: "check" only validates the config's shape, so also start the
 # proxy the way the pod does (non-root, generated keystore, the chart's
@@ -115,6 +171,10 @@ boot_test() {
   health_path="$(sed -n 's/^ *path: "\{0,1\}\(\/proxyAdmin\/[^"]*\)"\{0,1\}$/\1/p' "${work_dir}/default-values.yaml" | head -1)"
   health="$(curl -s --retry 40 --retry-delay 3 --retry-all-errors -o /dev/null -w '%{http_code}' \
     "http://127.0.0.1:${admin_port}${health_path}" || true)"
+  # The liveness probe's path must exist too, or every pod would be restarted.
+  local liveness_path liveness
+  liveness_path="$(sed -n '/livenessProbe:/,/path:/ s/^ *path: "\{0,1\}\(\/[^"]*\)"\{0,1\}$/\1/p' "${work_dir}/default-values.yaml" | head -1)"
+  liveness="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${admin_port}${liveness_path}" || true)"
   # Host is a load balancer name, which the pod's certificate doesn't match:
   # this also checks the SNI host check is off.
   datafeed="$(curl -sk -o /dev/null -w '%{http_code}' -X POST -H 'Host: proxy.example.internal' -H 'Feed: BOOT-TEST' \
@@ -128,10 +188,10 @@ boot_test() {
     proxy_id_ok=yes
   fi
 
-  if [ "${health}" = "200" ] && [ "${datafeed}" = "401" ] && [ "${proxy_id_ok}" = "yes" ]; then
-    echo "boot OK (health ${health}, unauthenticated datafeed ${datafeed}, proxy id from POD_NAME)"
+  if [ "${health}" = "200" ] && [ "${liveness}" = "200" ] && [ "${datafeed}" = "401" ] && [ "${proxy_id_ok}" = "yes" ]; then
+    echo "boot OK (health ${health}, liveness ${liveness_path} ${liveness}, unauthenticated datafeed ${datafeed}, proxy id from POD_NAME)"
   else
-    echo "boot FAILED (health ${health}, unauthenticated datafeed ${datafeed}, proxy id from POD_NAME: ${proxy_id_ok}; expected 200, 401, yes):"
+    echo "boot FAILED (health ${health}, liveness ${liveness_path} ${liveness}, unauthenticated datafeed ${datafeed}, proxy id from POD_NAME: ${proxy_id_ok}; expected 200, 200, 401, yes):"
     docker logs "${container}" 2>&1 | grep -v '^\s*at ' | tail -40
     result=1
   fi

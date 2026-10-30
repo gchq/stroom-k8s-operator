@@ -17,6 +17,14 @@ resource "kubernetes_namespace_v1" "proxy" {
 
 # Only the load balancers (in the lb subnets) may reach the proxies: the proxy
 # trusts the ALB's DN header from whoever sends it (F14, section 5.3).
+#
+# Known limit: this admits ANYTHING with an address in the lb subnets, not
+# just this ALB. Another load balancer or ENI placed there (e.g. a Stroom ALB,
+# an interface endpoint, a sender's NLB) could reach 8443 directly and send a
+# forged DN header, bypassing the ALB's 403 rules. Keep the lb subnets for
+# this stack's load balancers only. Pod security groups (Security Groups for
+# Pods), separate lb subnets per application, or ports no other application
+# uses would close it; see the design, section 14.
 resource "kubernetes_network_policy_v1" "proxy" {
   metadata {
     name      = "stroom-proxy-ingress"
@@ -69,10 +77,15 @@ resource "kubernetes_manifest" "secret_store" {
         aws = {
           service = "SecretsManager"
           region  = var.aws_region
+          # The controller assumes this role, which can read only the
+          # proxy's secrets (iam.tf).
+          role = one(aws_iam_role.external_secrets[*].arn)
         }
       }
     }
   }
+
+  depends_on = [aws_iam_role_policy.external_secrets]
 }
 
 resource "kubernetes_manifest" "proxy_secrets" {

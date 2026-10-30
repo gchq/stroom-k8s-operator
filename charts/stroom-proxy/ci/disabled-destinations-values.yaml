@@ -1,0 +1,18 @@
+# Destinations with "enabled: false" must stay disabled: the chart only
+# defaults a missing "enabled" to true. hack/validate-stroom-proxy-chart.sh
+# checks the rendered values as well as validating the config.
+proxyConfig:
+  forwardFileDestinations:
+    - name: local
+      path: /stroom-proxy/volume/forward
+  forwardHttpDestinations:
+    - name: disabled-http
+      enabled: false
+      forwardUrl: https://stroom.example.internal/stroom/datafeed
+  forwardS3Destinations:
+    - name: disabled-s3
+      enabled: false
+      client:
+        region: eu-west-2
+        bucketName: stroom-proxy-ci-data
+        keyPattern: ${type}/${year}/${month}/${day}/${feed}/${uuid}.zip

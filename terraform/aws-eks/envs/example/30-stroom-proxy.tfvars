@@ -12,8 +12,10 @@ platform_state = {
   region = "eu-west-2"
 }
 
-# Can change Object Lock settings and disable/delete the data bucket's KMS key
-# (besides the identity running Terraform).
+# Lock admins: can change the data bucket's Object Lock settings and bucket
+# policy, and disable, delete or re-policy its KMS key (besides the identity
+# running Terraform). List every role that runs Terraform for this stack, e.g.
+# CI and break-glass: any other can't update the bucket and key policies.
 admin_principal_arns = [] # e.g. ["arn:aws:iam::123456789012:role/PlatformAdmin"]
 
 # --- Proxies: one colour normally, two during a blue/green upgrade ---
@@ -46,7 +48,7 @@ private_ca_arn         = "arn:aws:acm-pca:eu-west-2:123456789012:certificate-aut
 
 privatelink = {
   enabled              = false
-  allowed_principals   = [] # e.g. ["arn:aws:iam::210987654321:root"]
+  allowed_principals   = [] # e.g. ["arn:aws:iam::444455556666:root"]
   acceptance_required  = true
   verification_zone_id = null # public zone for the TXT records that verify the private DNS names
 }

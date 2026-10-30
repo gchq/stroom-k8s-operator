@@ -26,11 +26,19 @@ data "aws_iam_policy_document" "data_key" {
     }
   }
 
-  # Losing the key would make the locked data unreadable.
+  # Losing the key would make the locked data unreadable. PutKeyPolicy is
+  # included because a new key policy could drop this statement.
+  # DeleteImportedKeyMaterial only applies to keys with imported material, but
+  # would have the same effect.
   statement {
-    sid       = "OnlyLockAdminsDisableOrDeleteKey"
-    effect    = "Deny"
-    actions   = ["kms:ScheduleKeyDeletion", "kms:DisableKey"]
+    sid    = "OnlyLockAdminsDisableOrDeleteKey"
+    effect = "Deny"
+    actions = [
+      "kms:ScheduleKeyDeletion",
+      "kms:DisableKey",
+      "kms:PutKeyPolicy",
+      "kms:DeleteImportedKeyMaterial",
+    ]
     resources = ["*"]
     principals {
       type        = "AWS"
@@ -40,6 +48,31 @@ data "aws_iam_policy_document" "data_key" {
       test     = "ArnNotLike"
       variable = "aws:PrincipalArn"
       values   = local.lock_admin_arns
+    }
+  }
+
+  # A grant can't remove the protection above, but it gives use of the key
+  # outside this policy and IAM. S3 doesn't need grants for SSE-KMS, and the
+  # proxy role has none; grants AWS services create for their own resources
+  # are still allowed.
+  statement {
+    sid       = "OnlyLockAdminsCreateGrants"
+    effect    = "Deny"
+    actions   = ["kms:CreateGrant"]
+    resources = ["*"]
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "ArnNotLike"
+      variable = "aws:PrincipalArn"
+      values   = local.lock_admin_arns
+    }
+    condition {
+      test     = "BoolIfExists"
+      variable = "kms:GrantIsForAWSResource"
+      values   = ["false"]
     }
   }
 }
@@ -208,10 +241,17 @@ data "aws_iam_policy_document" "data_bucket" {
     }
   }
 
+  # The bucket policy is included because a new policy could drop these
+  # statements. (The account's root user can always change or delete a bucket
+  # policy, whatever it says: that is the way back if every lock admin is gone.)
   statement {
-    sid       = "OnlyLockAdminsChangeObjectLock"
-    effect    = "Deny"
-    actions   = ["s3:PutBucketObjectLockConfiguration"]
+    sid    = "OnlyLockAdminsChangeObjectLockOrPolicy"
+    effect = "Deny"
+    actions = [
+      "s3:PutBucketObjectLockConfiguration",
+      "s3:PutBucketPolicy",
+      "s3:DeleteBucketPolicy",
+    ]
     resources = [local.data_bucket_arn]
     principals {
       type        = "*"

@@ -39,7 +39,7 @@ Pod Security Standard.
 
 | Port | Purpose |
 |---|---|
-| `8443` (`ports.https`) | HTTPS from the load balancer. Sender addresses come from `X-Forwarded-For`. |
+| `8443` (`ports.https`) | HTTPS from the load balancer. Forwarded headers (`X-Forwarded-For`, `Forwarded`, ...) are ignored, as senders could forge them: the proxy records the load balancer's address, and the load balancer's access logs have the senders'. |
 | `8444` (`ports.local`) | HTTPS bound to `127.0.0.1`, for in-pod callers. |
 | `8091` (`ports.admin`) | Admin: health checks and metrics, plain HTTP. |
 
@@ -67,14 +67,13 @@ colour: blue
 replicas: 3
 image:
   digest: sha256:f729b691b7001dbf7d2b99fcae9d6c150c99fddd0840f4f3375f43edb34ff68f
-serviceAccount:
-  name: stroom-proxy
 dfkSync:
   enabled: true
   bucket: my-receipt-config-bucket
   prefix: dfk/
 proxyConfig:
-  proxyId: prod
+  # One ID per pod, e.g. prod-stroom-proxy-blue-0.
+  proxyId: prod-${POD_NAME}
   forwardS3Destinations:
     - name: data-bucket
       client:
@@ -91,7 +90,9 @@ proxyConfig:
 * **Health checks**: `healthCheckPath` excludes, in one comma-separated `deny`
   list, the checks that call a downstream Stroom or the identity provider, so
   pods stay ready while those are down. Each name must be a registered check,
-  or the endpoint answers 500.
+  or the endpoint answers 500. The liveness probe uses `livenessCheckPath`
+  (Dropwizard's `/proxyAdmin/ping`) instead, so an outage elsewhere makes pods
+  unready without restarting them.
 * **SNI host check** is off on the HTTPS connectors. Requests carry the load
   balancer's host name, which the pod's self-signed certificate never matches,
   and Jetty would otherwise answer every request with `400 Invalid SNI`.
@@ -99,6 +100,12 @@ proxyConfig:
   in `X-Stroom-Mtls-Subject`. The proxy trusts that header from whoever sends
   it, so **only the ALB may reach port 8443**, and the ALB must strip or reject
   the header on its non-mTLS listener (see section 5.3 of the design).
+* **Meta from senders**: the proxy copies every request header and query
+  string parameter into the stored meta. Behind a load balancer it doesn't set
+  `RemoteDN` or `RemoteCertExpiry` itself, and it keeps a sender's
+  `RemoteAddress` and `RemoteHost` if the sender also sends `GUID`, so a sender
+  can set all four. The load balancer should refuse requests carrying them (the
+  Terraform's ALB does).
 
 ## Draining
 

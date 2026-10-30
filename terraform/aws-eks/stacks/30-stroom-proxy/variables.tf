@@ -20,7 +20,7 @@ variable "platform_state" {
 # See its variables.tf for the checks.
 
 variable "admin_principal_arns" {
-  description = "IAM principals allowed to change the data bucket's Object Lock settings and to disable or delete its KMS key, besides the identity running Terraform."
+  description = "Lock admins: IAM principals allowed to change the data bucket's Object Lock settings and bucket policy, and to disable, delete or change the policy of its KMS key, besides the identity running Terraform. List every identity that runs Terraform for this stack: any other can't update the bucket and key policies."
   type        = list(string)
   default     = []
 }
@@ -189,6 +189,12 @@ variable "waf_web_acl_arn" {
   description = "AWS WAF web ACL to associate with the ALB. null = none."
   type        = string
   default     = null
+}
+
+variable "alb_reject_client_meta" {
+  description = "Refuse (403) requests whose headers or query string set meta the proxy should set: RemoteDN, RemoteCertExpiry, X-SSL-Client-V-End, RemoteAddress, RemoteHost. Turn off only for senders that must pass them, such as an older upstream proxy forwarding all of its meta; those values then can't be trusted."
+  type        = bool
+  default     = true
 }
 
 variable "privatelink" {

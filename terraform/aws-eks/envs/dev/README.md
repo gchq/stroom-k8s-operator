@@ -70,15 +70,16 @@ address of each NLB (`nlb_dns_name` in the `endpoints` output) and give curl
 ```sh
 MTLS_IP=$(dig +short <mtls nlb_dns_name> | head -1)
 PLAIN_IP=$(dig +short <plain nlb_dns_name> | head -1)
-CURL_MTLS="curl --cacert test-certs/server-ca.pem --resolve mtls.proxy.dev.test:443:$MTLS_IP"
-CURL_PLAIN="curl --cacert test-certs/server-ca.pem --resolve proxy.dev.test:443:$PLAIN_IP"
+CURL_MTLS="curl --cacert ../../envs/dev/test-certs/server-ca.pem --resolve mtls.proxy.dev.test:443:$MTLS_IP"
+CURL_PLAIN="curl --cacert ../../envs/dev/test-certs/server-ca.pem --resolve proxy.dev.test:443:$PLAIN_IP"
 ```
 
 ## Tests
 
 Set `MTLS=https://mtls.proxy.dev.test` and `PLAIN=https://proxy.dev.test`,
 and use `$CURL_MTLS` and `$CURL_PLAIN` (above) in place of `curl`. The
-certificates are in `envs/dev/test-certs/`.
+commands run from `stacks/30-stroom-proxy`, so the certificates are in
+`../../envs/dev/test-certs/`.
 
 ### Platform (10-infra, 20-platform)
 
@@ -95,16 +96,27 @@ certificates are in `envs/dev/test-certs/`.
 
 ### mTLS endpoint
 
-* [ ] Valid certificate: `curl --cert test-certs/client.pem --key test-certs/client.key -H 'Feed: TEST-EVENTS' --data-binary 'hello' $MTLS/datafeed` returns 200.
+* [ ] Valid certificate: `$CURL_MTLS --cert ../../envs/dev/test-certs/client.pem --key ../../envs/dev/test-certs/client.key -H 'Feed: TEST-EVENTS' --data-binary 'hello' $MTLS/datafeed` returns 200.
 * [ ] No certificate: the TLS handshake fails.
 * [ ] Certificate from the other CA (`rogue-client.*`): the TLS handshake fails.
-* [ ] The receive log shows `RemoteDN=CN=test-sender,OU=dev,O=Stroom Test`
+* [ ] The receive log shows `X-Stroom-Mtls-Subject=CN=test-sender,OU=dev,O=Stroom Test`
       (`kubectl -n stroom-proxy logs <pod> stroom-proxy | grep '^receive '`).
-* [ ] **Open question (section 5.3)**: valid certificate plus a forged
-      `-H 'X-Stroom-Mtls-Subject: CN=someone-else'`. The receive log must show
-      the certificate's DN, not `someone-else`. If it shows `someone-else`,
-      stop: the ALB is passing the client's header through, and the mTLS
+      `RemoteDN=` is empty: the TLS session ends at the ALB (design F21), and
+      the subject header is logged because `30-stroom-proxy.tfvars` adds it
+      to `logStream.metaKeys`.
+* [ ] Valid certificate plus a forged `-H 'X-Stroom-Mtls-Subject: CN=someone-else'`:
+      the receive log shows the certificate's DN, not `someone-else` (the ALB
+      replaces the header, F20). If it shows `someone-else`, stop: the mTLS
       listener needs the same 403 rule as the plain one.
+* [ ] Valid certificate plus `-H 'RemoteDN: CN=someone-else'`: **403 from the
+      ALB**. Repeat with `RemoteCertExpiry`, `X-SSL-Client-V-End`,
+      `RemoteAddress` and `RemoteHost`, and with each as a query string
+      parameter (`$MTLS/datafeed?RemoteDN=x`, and `?remotedn=x` to check the
+      ALB matches the key without regard to case, as the proxy does).
+* [ ] Valid certificate plus `-H 'Forwarded: for=192.0.2.1'` (and
+      `X-Forwarded-For`): 200, and the receive log's `RemoteAddress` is an
+      ALB address in the lb subnets, not `192.0.2.1` (the proxy ignores
+      forwarded headers).
 
 ### Plain endpoint
 
@@ -112,6 +124,9 @@ certificates are in `envs/dev/test-certs/`.
 * [ ] **F14 protection**: `-H 'X-Stroom-Mtls-Subject: CN=someone-else'` and no
       other credentials returns **403 from the ALB** (not 200 from the proxy).
       Repeat with `X-Amzn-Mtls-Clientcert-Subject` and `X-SSL-CLIENT-S-DN`.
+* [ ] Client-set meta: `-H 'RemoteDN: CN=someone-else'`, the other four meta
+      headers and the query string forms (as on the mTLS endpoint) return
+      **403 from the ALB**, with and without a valid data feed key.
 * [ ] Data feed key: upload a DataFeedIdentities file to
       `s3://<receipt_config_bucket>/dfk/`; within `dfk_sync_interval_seconds`
       a request with `Authorization: Bearer <key>` and a matching `AccountId`

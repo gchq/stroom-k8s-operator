@@ -54,8 +54,9 @@ module "stroom_proxy" {
       node_count = v.node_count
     }
   }
-  secrets_name_prefix = local.platform.secrets_name_prefix
-  storage_class_name  = local.platform.storage_class_name
+  secrets_name_prefix       = local.platform.secrets_name_prefix
+  external_secrets_role_arn = local.platform.external_secrets_role_arn
+  storage_class_name        = local.platform.storage_class_name
 
   admin_principal_arns = var.admin_principal_arns
   tags                 = var.tags
@@ -87,6 +88,7 @@ module "stroom_proxy" {
   deregistration_delay   = var.deregistration_delay
   alb_access_logs_bucket = var.alb_access_logs_bucket
   waf_web_acl_arn        = var.waf_web_acl_arn
+  alb_reject_client_meta = var.alb_reject_client_meta
   privatelink            = var.privatelink
 
   auth                      = local.auth

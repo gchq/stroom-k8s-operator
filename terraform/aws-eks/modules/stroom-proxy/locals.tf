@@ -11,8 +11,9 @@ locals {
   # Load balancer and target group names are limited to 32 characters.
   short_name = trimsuffix(substr(var.name, 0, 20), "-")
 
-  # Principals allowed to change Object Lock settings and disable or delete
-  # the data key: the configured admins plus whoever runs Terraform.
+  # Principals allowed to change Object Lock settings and the data bucket's
+  # policy, and to disable, delete or re-policy the data key: the configured
+  # admins plus whoever runs Terraform.
   lock_admin_arns = distinct(concat(var.admin_principal_arns, [data.aws_iam_session_context.current.issuer_arn]))
 
   colours = keys(var.proxy_deployments)
@@ -202,6 +203,10 @@ resource "terraform_data" "input_checks" {
       # One pod per node (required pod anti-affinity).
       condition     = alltrue([for c, d in var.proxy_deployments : !contains(keys(var.proxy_node_colours), c) || d.replicas <= var.proxy_node_colours[c].node_count])
       error_message = "A colour has more replicas than nodes; each proxy needs its own node. Raise nodes_per_az for that colour in 10-infra."
+    }
+    precondition {
+      condition     = length(local.proxy_secrets) == 0 || var.external_secrets_role_arn != null
+      error_message = "The proxy has secrets (downstream or auth.openid.client_secret_name): set external_secrets_role_arn to the External Secrets controller's role (20-platform output external_secrets_role_arn)."
     }
     precondition {
       condition     = !var.privatelink.enabled || length(var.privatelink.allowed_principals) > 0

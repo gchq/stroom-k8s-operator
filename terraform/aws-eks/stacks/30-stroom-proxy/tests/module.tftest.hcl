@@ -211,6 +211,128 @@ run "default_deployment" {
     condition     = keys(time_sleep.pod_identity_propagation) == ["blue"] && time_sleep.pod_identity_propagation["blue"].create_duration == "30s"
     error_message = "Each colour's pods must wait for its Pod Identity association to propagate."
   }
+
+  assert {
+    condition     = length(aws_iam_role.external_secrets) == 0
+    error_message = "No secrets role when there are no secrets."
+  }
+
+  # Client-set meta (RemoteDN etc.): a rule per header and one for the query
+  # string, on the plain and mTLS listeners.
+  assert {
+    condition = (
+      length(aws_lb_listener_rule.reject_client_meta_headers) == 10 &&
+      length(aws_lb_listener_rule.reject_client_meta_query) == 2 &&
+      contains(keys(aws_lb_listener_rule.reject_client_meta_headers), "mtls/RemoteDN") &&
+      contains(keys(aws_lb_listener_rule.reject_client_meta_headers), "plain/RemoteAddress") &&
+      alltrue([for r in aws_lb_listener_rule.reject_client_meta_headers : r.action[0].fixed_response[0].status_code == "403" && alltrue([for c in r.condition : alltrue([for h in c.http_header : toset(h.values) == toset(["*"])])])]) &&
+      alltrue([for r in aws_lb_listener_rule.reject_client_meta_query : r.action[0].fixed_response[0].status_code == "403"])
+    )
+    error_message = "Every listener must refuse client-set RemoteDN, RemoteCertExpiry, X-SSL-Client-V-End, RemoteAddress and RemoteHost headers."
+  }
+
+  assert {
+    condition     = toset([for q in tolist(aws_lb_listener_rule.reject_client_meta_query["mtls"].condition)[0].query_string : q.key]) == toset(["RemoteDN", "RemoteCertExpiry", "X-SSL-Client-V-End", "RemoteAddress", "RemoteHost"])
+    error_message = "The query string rule must cover all five meta keys (5 condition values, the ALB's limit per rule)."
+  }
+
+  assert {
+    # Unique per listener: the DN header rules use 1-4 and the NLB health check 100.
+    condition     = toset([for k, r in aws_lb_listener_rule.reject_client_meta_headers : r.priority if startswith(k, "plain/")]) == toset([10, 11, 12, 13, 14]) && aws_lb_listener_rule.reject_client_meta_query["plain"].priority == 15
+    error_message = "The meta rules need distinct priorities 10-15."
+  }
+}
+
+# The policies themselves. aws_iam_policy_document is mocked (its JSON is a
+# placeholder), so these check the statements it is given.
+run "data_protection_policies" {
+  command = plan
+
+  module {
+    source = "../../modules/stroom-proxy"
+  }
+
+  variables {
+    admin_principal_arns = ["arn:aws:iam::123456789012:role/PlatformAdmin"]
+  }
+
+  # Data key: only lock admins (the admins plus the Terraform role) may
+  # disable, delete or re-policy it, or create grants for non-AWS resources.
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.data_key[0].statement : (
+        s.effect == "Deny" &&
+        length(setsubtract(["kms:ScheduleKeyDeletion", "kms:DisableKey", "kms:PutKeyPolicy", "kms:DeleteImportedKeyMaterial"], s.actions)) == 0 &&
+        anytrue([for c in s.condition : c.test == "ArnNotLike" && c.variable == "aws:PrincipalArn" && toset(c.values) == toset(["arn:aws:iam::123456789012:role/PlatformAdmin", "arn:aws:iam::123456789012:role/terraform"])])
+      ) if s.sid == "OnlyLockAdminsDisableOrDeleteKey"
+    ]) && length([for s in data.aws_iam_policy_document.data_key[0].statement : s if s.sid == "OnlyLockAdminsDisableOrDeleteKey"]) == 1
+    error_message = "The data key policy must deny ScheduleKeyDeletion, DisableKey, PutKeyPolicy and DeleteImportedKeyMaterial to all but the lock admins."
+  }
+
+  assert {
+    condition = length([
+      for s in data.aws_iam_policy_document.data_key[0].statement : s
+      if s.sid == "OnlyLockAdminsCreateGrants" && s.effect == "Deny" && toset(s.actions) == toset(["kms:CreateGrant"]) &&
+      anytrue([for c in s.condition : c.test == "BoolIfExists" && c.variable == "kms:GrantIsForAWSResource" && toset(c.values) == toset(["false"])]) &&
+      anytrue([for c in s.condition : c.test == "ArnNotLike" && c.variable == "aws:PrincipalArn" && contains(c.values, "arn:aws:iam::123456789012:role/terraform")])
+    ]) == 1
+    error_message = "Only lock admins may create grants on the data key, except grants AWS services make for their resources."
+  }
+
+  # Data bucket: only lock admins may change Object Lock or the bucket policy.
+  # The Terraform role is one, so it can still manage the policy.
+  assert {
+    condition = length([
+      for s in data.aws_iam_policy_document.data_bucket[0].statement : s
+      if s.sid == "OnlyLockAdminsChangeObjectLockOrPolicy" && s.effect == "Deny" &&
+      toset(s.actions) == toset(["s3:PutBucketObjectLockConfiguration", "s3:PutBucketPolicy", "s3:DeleteBucketPolicy"]) &&
+      anytrue([for c in s.condition : c.test == "ArnNotLike" && c.variable == "aws:PrincipalArn" && toset(c.values) == toset(["arn:aws:iam::123456789012:role/PlatformAdmin", "arn:aws:iam::123456789012:role/terraform"])])
+    ]) == 1
+    error_message = "The data bucket policy must deny Object Lock and bucket policy changes to all but the lock admins (including the Terraform role)."
+  }
+
+  assert {
+    condition = length([
+      for s in data.aws_iam_policy_document.data_bucket[0].statement : s
+      if s.sid == "DenyProxyChangingData" && contains(s.actions, "s3:Delete*") && contains(s.actions, "s3:PutObjectRetention") && contains(s.actions, "s3:PutBucket*")
+    ]) == 1
+    error_message = "The data bucket policy must stop the proxy role deleting or re-locking data."
+  }
+
+  # Proxy role: add objects only, and use the data key only through S3.
+  assert {
+    condition = length([
+      for s in data.aws_iam_policy_document.proxy.statement : s
+      if s.sid == "AddDataObjects" && toset(s.actions) == toset(["s3:PutObject", "s3:PutObjectTagging", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"])
+    ]) == 1
+    error_message = "The proxy role must only be able to add objects."
+  }
+
+  assert {
+    condition = length([
+      for s in data.aws_iam_policy_document.proxy.statement : s
+      if s.sid == "EncryptDataObjects" &&
+      anytrue([for c in s.condition : c.test == "StringEquals" && c.variable == "kms:ViaService" && toset(c.values) == toset(["s3.eu-west-2.amazonaws.com"])])
+    ]) == 1
+    error_message = "The proxy role must use the data key only through S3 (kms:ViaService)."
+  }
+}
+
+run "client_meta_rejection_off" {
+  command = plan
+
+  module {
+    source = "../../modules/stroom-proxy"
+  }
+
+  variables {
+    alb_reject_client_meta = false
+  }
+
+  assert {
+    condition     = length(aws_lb_listener_rule.reject_client_meta_headers) == 0 && length(aws_lb_listener_rule.reject_client_meta_query) == 0 && length(aws_lb_listener_rule.plain_reject_dn_headers) == 4
+    error_message = "alb_reject_client_meta = false removes only the meta rules, not the DN header rules."
+  }
 }
 
 run "privatelink" {
@@ -223,7 +345,7 @@ run "privatelink" {
   variables {
     privatelink = {
       enabled            = true
-      allowed_principals = ["arn:aws:iam::210987654321:root"]
+      allowed_principals = ["arn:aws:iam::444455556666:root"]
     }
   }
 
@@ -300,7 +422,48 @@ run "downstream_and_secrets" {
       hostname            = "stroom.example.internal"
       api_key_secret_name = "downstream-api-key"
     }
-    receipt = { check_mode = "RECEIPT_POLICY" }
+    receipt                   = { check_mode = "RECEIPT_POLICY" }
+    external_secrets_role_arn = "arn:aws:iam::123456789012:role/stroom-proxy-test-eso-20261030"
+  }
+
+  override_resource {
+    target          = aws_iam_role.external_secrets[0]
+    override_during = plan
+    values          = { arn = "arn:aws:iam::123456789012:role/stroom-proxy-test-pxeso-1" }
+  }
+
+  # External Secrets reads the secrets through a role of the module's own,
+  # which trusts only the controller's role and reads only these secrets.
+  assert {
+    condition     = kubernetes_manifest.secret_store[0].manifest.spec.provider.aws.role == "arn:aws:iam::123456789012:role/stroom-proxy-test-pxeso-1" && aws_iam_role.external_secrets[0].name_prefix == "stroom-proxy-test-pxeso-"
+    error_message = "The SecretStore must use the module's secrets role, named <cluster name>-pxeso-*."
+  }
+
+  assert {
+    condition = length([
+      for s in data.aws_iam_policy_document.external_secrets_trust[0].statement : s
+      if toset(s.actions) == toset(["sts:AssumeRole", "sts:TagSession"]) &&
+      anytrue([for p in s.principals : p.type == "AWS" && toset(p.identifiers) == toset(["arn:aws:iam::123456789012:role/stroom-proxy-test-eso-20261030"])])
+    ]) == 1 && length(data.aws_iam_policy_document.external_secrets_trust[0].statement) == 1
+    error_message = "The secrets role must trust only the External Secrets controller's role."
+  }
+
+  assert {
+    condition = length([
+      for s in data.aws_iam_policy_document.external_secrets[0].statement : s
+      if s.sid == "ReadProxySecrets" && toset(s.actions) == toset(["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]) &&
+      toset(s.resources) == toset(["arn:aws:secretsmanager:eu-west-2:123456789012:secret:stroom-proxy/test/downstream-api-key-??????"])
+    ]) == 1
+    error_message = "The secrets role must read only the proxy's own secrets."
+  }
+
+  assert {
+    condition = length([
+      for s in data.aws_iam_policy_document.external_secrets[0].statement : s
+      if s.sid == "DecryptViaSecretsManager" && toset(s.actions) == toset(["kms:Decrypt"]) &&
+      anytrue([for c in s.condition : c.variable == "kms:ViaService" && toset(c.values) == toset(["secretsmanager.eu-west-2.amazonaws.com"])])
+    ]) == 1
+    error_message = "The secrets role may decrypt only through Secrets Manager."
   }
 
   assert {
@@ -336,6 +499,12 @@ run "blue_green" {
     active_colour = "green"
   }
 
+  override_resource {
+    target          = aws_lb_listener.test["mtls"]
+    override_during = plan
+    values          = { arn = "arn:aws:elasticloadbalancing:eu-west-2:123456789012:listener/app/test/1/9443" }
+  }
+
   assert {
     condition     = length(aws_lb_target_group.proxy) == 2 && length(helm_release.proxy) == 2 && length(aws_eks_pod_identity_association.proxy) == 2
     error_message = "Each colour needs its own target group, release and Pod Identity association."
@@ -356,6 +525,15 @@ run "blue_green" {
   assert {
     condition     = length(aws_lb_listener_rule.test_plain_reject_dn_headers) == 4
     error_message = "The plain test listener must reject DN headers too."
+  }
+
+  assert {
+    condition = (
+      toset(keys(aws_lb_listener_rule.reject_client_meta_query)) == toset(["plain", "mtls", "test_plain", "test_mtls"]) &&
+      length(aws_lb_listener_rule.reject_client_meta_headers) == 20 &&
+      aws_lb_listener_rule.reject_client_meta_query["test_mtls"].listener_arn == "arn:aws:elasticloadbalancing:eu-west-2:123456789012:listener/app/test/1/9443"
+    )
+    error_message = "The test listeners must refuse client-set meta too."
   }
 }
 
@@ -604,6 +782,23 @@ run "rejects_privatelink_without_principals" {
 
   variables {
     privatelink = { enabled = true }
+  }
+
+  expect_failures = [terraform_data.input_checks]
+}
+
+run "rejects_secrets_without_external_secrets_role" {
+  command = plan
+
+  module {
+    source = "../../modules/stroom-proxy"
+  }
+
+  variables {
+    downstream = {
+      hostname            = "stroom.example.internal"
+      api_key_secret_name = "downstream-api-key"
+    }
   }
 
   expect_failures = [terraform_data.input_checks]

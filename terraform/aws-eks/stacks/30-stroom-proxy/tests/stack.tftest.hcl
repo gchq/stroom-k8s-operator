@@ -56,8 +56,9 @@ override_data {
   target = data.terraform_remote_state.platform
   values = {
     outputs = {
-      secrets_name_prefix = "stroom-proxy/stroom-proxy-test/"
-      storage_class_name  = "gp3"
+      secrets_name_prefix       = "stroom-proxy/stroom-proxy-test/"
+      storage_class_name        = "gp3"
+      external_secrets_role_arn = "arn:aws:iam::123456789012:role/stroom-proxy-test-eso-20261030"
     }
   }
 }
@@ -100,6 +101,20 @@ run "stack_plan" {
   assert {
     condition     = output.active_colour == "blue" && output.namespace == "stroom-proxy"
     error_message = "Unexpected active colour or namespace."
+  }
+}
+
+# With secrets, the module creates its own secrets role, trusting 20-platform's
+# External Secrets role. The plan only passes the module's input checks if
+# that role's ARN reaches it from the platform state.
+run "external_secrets_role_from_platform" {
+  command = plan
+
+  variables {
+    downstream = {
+      hostname            = "stroom.example.internal"
+      api_key_secret_name = "downstream-api-key"
+    }
   }
 }
 

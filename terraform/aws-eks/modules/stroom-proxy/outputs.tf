@@ -67,6 +67,11 @@ output "proxy_role_arn" {
   value       = aws_iam_role.proxy.arn
 }
 
+output "secrets_role_arn" {
+  description = "IAM role External Secrets assumes to read the proxy's secrets. null when the proxy has none."
+  value       = one(aws_iam_role.external_secrets[*].arn)
+}
+
 output "helm_values" {
   description = "The Helm values rendered for each colour's release (YAML), for inspection."
   value       = { for c, v in local.helm_values : c => yamlencode(v) }
