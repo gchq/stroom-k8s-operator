@@ -14,12 +14,12 @@ output "external_secrets_namespace" {
 }
 
 output "external_secrets_role_arn" {
-  description = "IAM role of the External Secrets Operator (reads secrets under secrets_name_prefix)."
+  description = "IAM role of the External Secrets Operator. It reads no secrets itself: workload roles named <cluster>-* that trust it are assumed per SecretStore."
   value       = aws_iam_role.external_secrets.arn
 }
 
 output "secrets_name_prefix" {
-  description = "Secrets Manager name prefix the External Secrets Operator may read."
+  description = "Secrets Manager name prefix of the deployment's secrets. Workload roles grant read access under it."
   value       = var.secrets_name_prefix
 }
 

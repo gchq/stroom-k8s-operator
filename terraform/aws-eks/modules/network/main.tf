@@ -1,19 +1,23 @@
 locals {
   create_vpc = var.existing_vpc_id == null
 
-  azs = slice(data.aws_availability_zones.available.names, 0, var.az_count)
+  # The pinned zones, or the first az_count zones available now. Unpinned, an
+  # impaired zone (no longer "available") would shift the list on a later
+  # plan, moving subnets and node groups; record the zones in var.azs.
+  azs      = var.azs != null ? var.azs : slice(data.aws_availability_zones.available.names, 0, var.az_count)
+  az_count = length(local.azs)
 
   # Private subnets (nodes, pods): one /19 per AZ in a /16, in the first half
   # of the range. Public subnets (NAT gateways, internet-facing NLBs): one /22
   # per AZ in a /16, starting three quarters in. Smaller VPCs scale the same way.
-  private_subnets = [for i in range(var.az_count) : cidrsubnet(var.vpc_cidr, 3, i)]
-  public_subnets  = [for i in range(var.az_count) : cidrsubnet(var.vpc_cidr, 6, 48 + i)]
+  private_subnets = [for i in range(local.az_count) : cidrsubnet(var.vpc_cidr, 3, i)]
+  public_subnets  = [for i in range(local.az_count) : cidrsubnet(var.vpc_cidr, 6, 48 + i)]
 
   # LB subnets (the ALB and internal NLBs only): always /26, which leaves an
   # ALB room to scale, carved from the block after the public subnets. Proxy
   # pods accept traffic only from these ranges.
   lb_newbits = 26 - tonumber(split("/", var.vpc_cidr)[1])
-  lb_subnets = [for i in range(var.az_count) : cidrsubnet(var.vpc_cidr, local.lb_newbits, 52 * pow(2, local.lb_newbits - 6) + i)]
+  lb_subnets = [for i in range(local.az_count) : cidrsubnet(var.vpc_cidr, local.lb_newbits, 52 * pow(2, local.lb_newbits - 6) + i)]
 }
 
 data "aws_availability_zones" "available" {

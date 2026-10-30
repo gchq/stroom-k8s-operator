@@ -76,13 +76,24 @@ variable "system_node_instance_type" {
 }
 
 variable "system_node_count" {
-  description = "Number of system nodes, spread across AZs."
+  description = "Number of system nodes, spread across AZs. With Stroom node sets the system nodes also run cert-manager, trust-manager, metrics-server, the EFS CSI controller and the Stroom operator: about 24 cluster service pods plus 7 DaemonSet pods per node, so 2 × t3.medium (17 pods each) is too small; use at least 2 × t3.large or m6i.large."
   type        = number
   default     = 2
 
   validation {
     condition     = var.system_node_count >= 1
     error_message = "system_node_count must be at least 1."
+  }
+
+  validation {
+    # Pods the system nodes can hold beyond their DaemonSets, for types whose
+    # limit is known; other types are only warned about (check.system_node_capacity).
+    condition = (
+      length(var.stroom_node_sets) == 0 ||
+      lookup(local.max_pods_by_instance_type, var.system_node_instance_type, null) == null ||
+      var.system_node_count * (lookup(local.max_pods_by_instance_type, var.system_node_instance_type, 0) - local.system_daemonset_pods) >= local.stroom_system_pods
+    )
+    error_message = "With Stroom node sets, ${var.system_node_count} × ${var.system_node_instance_type} system nodes don't have enough pod slots: beyond ${local.system_daemonset_pods} DaemonSet pods per node they need ${local.stroom_system_pods} slots (about 24 cluster service pods plus headroom for rolling updates), i.e. system_node_count × (max pods − ${local.system_daemonset_pods}) ≥ ${local.stroom_system_pods}. Use at least 2 × t3.large or 2 × m6i.large (or 3 for one per AZ)."
   }
 }
 
@@ -194,9 +205,21 @@ variable "stroom_node_sets" {
     kubernetes_version  : kubelet minor version, e.g. "1.37". Explicit, so a control
                           plane upgrade doesn't roll Stroom nodes.
     ami_release_version : EKS AMI release. null = the latest when the node group is
-                          created, then left unchanged. Changing it replaces the
-                          nodes one AZ group at a time (drained, PDB-limited).
+                          created, then left unchanged.
     root_volume_gb      : root volume size. Container images and emptyDirs are on NVMe.
+    az_overrides        : per AZ group ("az1", "az2", ...), instance_types,
+                          kubernetes_version and/or ami_release_version that
+                          replace the set's for that group only. The AZ groups are
+                          separate node groups that Terraform updates in parallel,
+                          so changing the set's AMI, version or instance types
+                          drains (or, for instance types, replaces) every AZ's
+                          nodes at once, more than the PDB allows. Change one AZ
+                          group at a time here, then move the set's own value and
+                          remove the overrides (a no-op).
+
+    The node groups are keyed by subnet index, so the private subnets' number and
+    order must not change once Stroom nodes exist: the plan fails if a group would
+    move to another subnet, shrink or disappear.
   EOT
   type = map(object({
     instance_types      = list(string)
@@ -204,8 +227,33 @@ variable "stroom_node_sets" {
     kubernetes_version  = string
     ami_release_version = optional(string)
     root_volume_gb      = optional(number, 50)
+    az_overrides = optional(map(object({
+      instance_types      = optional(list(string))
+      kubernetes_version  = optional(string)
+      ami_release_version = optional(string)
+    })), {})
   }))
   default = {}
+
+  validation {
+    # Only AZ groups the set has: node_count nodes over the subnets fill az1, az2, ... in order.
+    condition = alltrue(flatten([
+      for s in values(var.stroom_node_sets) : [
+        for az in keys(s.az_overrides) :
+        can(regex("^az[1-9][0-9]*$", az)) ? tonumber(trimprefix(az, "az")) <= min(s.node_count, length(var.private_subnet_ids)) : false
+      ]
+    ]))
+    error_message = "az_overrides keys must name one of the node set's AZ groups: \"az1\" up to \"az<n>\", where n is the smaller of node_count and the number of private subnets."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for s in values(var.stroom_node_sets) : [
+        for o in values(s.az_overrides) : o.instance_types == null ? true : length(o.instance_types) > 0
+      ]
+    ]))
+    error_message = "An az_overrides entry's instance_types must not be empty (leave it out to keep the set's)."
+  }
 
   validation {
     condition     = alltrue([for s in keys(var.stroom_node_sets) : can(regex("^[a-z][a-z0-9]{0,9}$", s))])
@@ -221,7 +269,8 @@ variable "stroom_node_sets" {
     # As for the proxy: no Graviton until the gchq/stroom image is published for arm64.
     condition = alltrue(flatten([
       for s in values(var.stroom_node_sets) : [
-        for t in s.instance_types : !can(regex("^(a1|[a-z]+[0-9]+[a-z]*g[a-z]*)\\.", lower(t)))
+        for t in concat(s.instance_types, flatten([for o in values(s.az_overrides) : coalesce(o.instance_types, [])])) :
+        !can(regex("^(a1|[a-z]+[0-9]+[a-z]*g[a-z]*)\\.", lower(t)))
       ]
     ]))
     error_message = "stroom_node_sets contains a Graviton (arm64) instance type. Use an x86_64 type with instance-store NVMe, such as r6id, m6id or i4i."
@@ -232,7 +281,8 @@ variable "stroom_node_sets" {
     # x2idn), or are storage-optimised (i3, i3en, i4i, im4gn is Graviton).
     condition = alltrue(flatten([
       for s in values(var.stroom_node_sets) : [
-        for t in s.instance_types : can(regex("^([a-z]+[0-9]+[a-z]*d[a-z]*|i[0-9]+[a-z]*)\\.", lower(t)))
+        for t in concat(s.instance_types, flatten([for o in values(s.az_overrides) : coalesce(o.instance_types, [])])) :
+        can(regex("^([a-z]+[0-9]+[a-z]*d[a-z]*|i[0-9]+[a-z]*)\\.", lower(t)))
       ]
     ]))
     error_message = "Stroom node instance types need instance-store NVMe (a \"d\" family such as r6id, m6id or c6id, or i4i), which holds Stroom's reference data, search results and temp files."
@@ -249,14 +299,16 @@ variable "stroom_node_sets" {
   }
 
   validation {
-    condition = alltrue([
-      for s in values(var.stroom_node_sets) :
-      can(regex("^1\\.[0-9]+$", s.kubernetes_version)) ? (
-        tonumber(split(".", var.kubernetes_version)[1]) - tonumber(split(".", s.kubernetes_version)[1]) >= 0 &&
-        tonumber(split(".", var.kubernetes_version)[1]) - tonumber(split(".", s.kubernetes_version)[1]) <= 3
-      ) : false
-    ])
-    error_message = "Each Stroom node set's kubernetes_version must look like \"1.37\" and be the cluster's version or up to three minor versions older."
+    condition = alltrue(flatten([
+      for s in values(var.stroom_node_sets) : [
+        for v in concat([s.kubernetes_version], [for o in values(s.az_overrides) : o.kubernetes_version if o.kubernetes_version != null]) :
+        can(regex("^1\\.[0-9]+$", v)) ? (
+          tonumber(split(".", var.kubernetes_version)[1]) - tonumber(split(".", v)[1]) >= 0 &&
+          tonumber(split(".", var.kubernetes_version)[1]) - tonumber(split(".", v)[1]) <= 3
+        ) : false
+      ]
+    ]))
+    error_message = "Each Stroom node set's kubernetes_version (and any in its az_overrides) must look like \"1.37\" and be the cluster's version or up to three minor versions older."
   }
 
   validation {
@@ -265,6 +317,21 @@ variable "stroom_node_sets" {
       s.ami_release_version == null ? true : startswith(s.ami_release_version, "${s.kubernetes_version}.")
     ])
     error_message = "ami_release_version must belong to the node set's kubernetes_version (e.g. \"1.37.4-20261020\" for 1.37)."
+  }
+
+  validation {
+    # An AZ group's AMI must match its own Kubernetes version: the override's,
+    # or the set's when the override doesn't change it.
+    condition = alltrue(flatten([
+      for s in values(var.stroom_node_sets) : [
+        for o in values(s.az_overrides) :
+        o.ami_release_version == null && o.kubernetes_version == null ? true : startswith(
+          coalesce(o.ami_release_version, s.ami_release_version, "${coalesce(o.kubernetes_version, s.kubernetes_version)}."),
+          "${coalesce(o.kubernetes_version, s.kubernetes_version)}."
+        )
+      ]
+    ]))
+    error_message = "Each az_overrides entry's AMI must belong to that AZ group's Kubernetes version. When an override changes kubernetes_version, give it a matching ami_release_version too (or leave the set's ami_release_version null)."
   }
 }
 

@@ -64,6 +64,13 @@ run "proxy_only_installs_nothing_for_stroom" {
 run "stroom_cluster_plan" {
   command = plan
 
+  variables {
+    stroom_operator = {
+      image_repository = "123456789012.dkr.ecr.eu-west-2.amazonaws.com/stroom-k8s-operator"
+      image_tag        = "stroom-eks-f3b5277"
+    }
+  }
+
   override_data {
     target = data.terraform_remote_state.infra
     values = {
@@ -142,6 +149,45 @@ run "module_with_stroom" {
     system_node_label   = { key = "workload", value = "system" }
     secrets_name_prefix = "stroom/test/"
     stroom_enabled      = true
+    stroom_operator = {
+      image_repository = "123456789012.dkr.ecr.eu-west-2.amazonaws.com/stroom-k8s-operator"
+      image_tag        = "stroom-eks-f3b5277"
+    }
+    internal_ca_additional_trusted_certificates = "-----BEGIN CERTIFICATE-----\nMIIBold\n-----END CERTIFICATE-----\n"
+  }
+
+  assert {
+    condition = (
+      yamldecode(helm_release.cert_manager[0].values[0]).webhook.nodeSelector.workload == "system" &&
+      yamldecode(helm_release.cert_manager[0].values[0]).cainjector.nodeSelector.workload == "system" &&
+      yamldecode(helm_release.cert_manager[0].values[0]).startupapicheck.nodeSelector.workload == "system"
+    )
+    error_message = "Expected cert-manager's webhook, cainjector and startupapicheck on the system nodes."
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.cert_manager[0].values[0]).global.rbac.aggregateClusterRoles == false
+    error_message = "cert-manager must not aggregate Certificate rights into the default edit and admin roles."
+  }
+
+  assert {
+    condition     = length(time_sleep.trust_manager_webhook) == 1 && time_sleep.trust_manager_webhook[0].create_duration == "30s"
+    error_message = "Expected a wait for trust-manager's webhook before the CA's Bundle is created."
+  }
+
+  assert {
+    condition = (
+      yamldecode(helm_release.internal_ca[0].values[0]).chartChecksum == local.local_chart_checksums["internal_ca"] &&
+      yamldecode(helm_release.stroom_operator[0].values[0]).chartChecksum == local.local_chart_checksums["stroom_operator"] &&
+      yamldecode(helm_release.stroom_operator_crds[0].values[0]).chartChecksum == local.local_chart_checksums["stroom_operator_crds"] &&
+      length(distinct(values(local.local_chart_checksums))) == 3
+    )
+    error_message = "Expected each local chart's checksum in its release's values, so a change to the chart upgrades the release."
+  }
+
+  assert {
+    condition     = startswith(yamldecode(helm_release.internal_ca[0].values[0]).additionalTrustedCertificates, "-----BEGIN CERTIFICATE-----")
+    error_message = "Expected the extra trusted CA certificates passed to the CA chart."
   }
 
   assert {
@@ -224,4 +270,53 @@ run "module_operator_from_a_repository_and_registry" {
     )
     error_message = "Expected the given operator image."
   }
+
+  assert {
+    condition     = !can(yamldecode(helm_release.stroom_operator[0].values[0]).chartChecksum) && length(helm_release.stroom_operator_crds[0].values) == 0
+    error_message = "A chart from a repository is upgraded by its version; no checksum needed."
+  }
+}
+
+run "module_rejects_local_charts_without_an_image" {
+  command = plan
+
+  module {
+    source = "../../modules/platform"
+  }
+
+  variables {
+    cluster_name        = "stroom-test"
+    aws_region          = "eu-west-2"
+    vpc_id              = "vpc-0123456789abcdef0"
+    system_node_label   = { key = "workload", value = "system" }
+    secrets_name_prefix = "stroom/test/"
+    stroom_enabled      = true
+    stroom_operator     = { image_tag = "stroom-eks-f3b5277" }
+  }
+
+  expect_failures = [var.stroom_operator]
+}
+
+run "module_rejects_bad_extra_ca" {
+  command = plan
+
+  module {
+    source = "../../modules/platform"
+  }
+
+  variables {
+    cluster_name        = "stroom-test"
+    aws_region          = "eu-west-2"
+    vpc_id              = "vpc-0123456789abcdef0"
+    system_node_label   = { key = "workload", value = "system" }
+    secrets_name_prefix = "stroom/test/"
+    stroom_enabled      = true
+    stroom_operator = {
+      image_repository = "123456789012.dkr.ecr.eu-west-2.amazonaws.com/stroom-k8s-operator"
+      image_tag        = "stroom-eks-f3b5277"
+    }
+    internal_ca_additional_trusted_certificates = "not a certificate"
+  }
+
+  expect_failures = [var.internal_ca_additional_trusted_certificates]
 }

@@ -83,6 +83,13 @@ output "stroom_node_sets" {
       node_groups        = sort([for k, g in local.stroom_node_groups : k if g.set_name == set_name])
     }
   }
+
+  precondition {
+    # A Stroom node group of a node set that is still configured must not go:
+    # its node's pod and EBS volume are in that AZ.
+    condition     = length(local.removed_stroom_node_groups) == 0
+    error_message = "This would delete the Stroom node groups ${join(", ", local.removed_stroom_node_groups)}, whose nodes hold Stroom pods and their EBS volumes in those AZs. Keep the private subnets' number and order (az_count, azs, existing_private_subnet_ids) and only raise node_count. Removing a Stroom node is a manual runbook."
+  }
 }
 
 output "stroom_node_taint" {

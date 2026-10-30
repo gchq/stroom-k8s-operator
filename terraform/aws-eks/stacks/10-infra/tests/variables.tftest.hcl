@@ -42,6 +42,19 @@ mock_provider "aws" {
       issuer_arn = "arn:aws:iam::123456789012:role/terraform"
     }
   }
+
+  mock_data "aws_region" {
+    defaults = {
+      region = "eu-west-2"
+    }
+  }
+
+  # No cluster yet, unless a run overrides it.
+  mock_data "aws_eks_clusters" {
+    defaults = {
+      names = []
+    }
+  }
 }
 
 variables {

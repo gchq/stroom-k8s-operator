@@ -47,8 +47,11 @@ resource "aws_iam_role" "lb_controller" {
 resource "aws_iam_policy" "lb_controller" {
   name_prefix = "${var.cluster_name}-lbc-"
   description = "AWS Load Balancer Controller ${var.lb_controller_chart_version}"
-  policy      = file("${path.module}/lb-controller-iam-policy.json")
-  tags        = var.tags
+  # "full": the upstream policy for the chart version. "target_group_binding":
+  # describes plus register/deregister targets only, no security group,
+  # listener or load balancer changes.
+  policy = file(var.lb_controller_iam_policy == "full" ? "${path.module}/lb-controller-iam-policy.json" : "${path.module}/lb-controller-tgb-iam-policy.json")
+  tags   = var.tags
 }
 
 resource "aws_iam_role_policy_attachment" "lb_controller" {
@@ -195,10 +198,14 @@ resource "aws_eks_addon" "cloudwatch" {
 ################################################################################
 # External Secrets Operator
 #
-# Reads Secrets Manager secrets under secrets_name_prefix only. The
-# SecretStore itself is created by 30-stroom-proxy, in the proxy namespace:
-# its CRD only exists once this release is installed, and Terraform can't plan
-# a custom resource before its CRD exists.
+# The controller's own role reads no secrets. Each workload stack creates a
+# role of its own (name prefix "<cluster>-proxy-eso-", "<cluster>-stroom-eso-")
+# that may read only that workload's secrets and trusts this role, and points
+# its SecretStore at it; the controller assumes it per SecretStore. So one
+# namespace's SecretStore can't read another workload's secrets. The
+# SecretStores are created by those stacks: their CRD only exists once this
+# release is installed, and Terraform can't plan a custom resource before its
+# CRD exists.
 ################################################################################
 
 resource "aws_iam_role" "external_secrets" {
@@ -209,25 +216,14 @@ resource "aws_iam_role" "external_secrets" {
 
 data "aws_iam_policy_document" "external_secrets" {
   statement {
-    sid       = "ReadProxySecrets"
-    actions   = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
-    resources = ["arn:${data.aws_partition.current.partition}:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${var.secrets_name_prefix}*"]
-  }
-
-  statement {
-    sid       = "DecryptViaSecretsManager"
-    actions   = ["kms:Decrypt"]
-    resources = ["*"]
-    condition {
-      test     = "StringEquals"
-      variable = "kms:ViaService"
-      values   = ["secretsmanager.${var.aws_region}.amazonaws.com"]
-    }
+    sid       = "AssumeWorkloadSecretRoles"
+    actions   = ["sts:AssumeRole", "sts:TagSession"]
+    resources = ["arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role/${var.cluster_name}-*"]
   }
 }
 
 resource "aws_iam_role_policy" "external_secrets" {
-  name   = "read-proxy-secrets"
+  name   = "assume-workload-secret-roles"
   role   = aws_iam_role.external_secrets.id
   policy = data.aws_iam_policy_document.external_secrets.json
 }
@@ -259,6 +255,14 @@ resource "helm_release" "external_secrets" {
     serviceAccount = {
       create = true
       name   = local.external_secrets_service_account
+    }
+    # Don't add ExternalSecret and SecretStore rights to the default view, edit
+    # and admin roles: only cluster admins (Terraform) create them, so a
+    # namespace user can't point a SecretStore at another workload's role.
+    rbac = {
+      aggregateToView  = false
+      aggregateToEdit  = false
+      aggregateToAdmin = false
     }
   })]
 

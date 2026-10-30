@@ -26,6 +26,30 @@ variable "lb_controller_chart_version" {
   default     = "3.6.2"
 }
 
+variable "lb_controller_iam_policy" {
+  description = <<-EOT
+    IAM policy of the AWS Load Balancer Controller.
+    "full"                 : the upstream policy for the chart version
+                             (lb-controller-iam-policy.json). It can also change
+                             security group rules and any ALB's listeners and
+                             rules, which TargetGroupBinding doesn't need.
+    "target_group_binding" : describes, plus registering and deregistering targets
+                             in existing target groups (lb-controller-tgb-iam-policy.json).
+                             Enough for TargetGroupBinding without spec.networking,
+                             as far as the controller's code shows, but not yet
+                             proven on a cluster: switch, roll a proxy pod and
+                             check its readiness gate and the controller's logs
+                             for AccessDenied before relying on it.
+  EOT
+  type        = string
+  default     = "full"
+
+  validation {
+    condition     = contains(["full", "target_group_binding"], var.lb_controller_iam_policy)
+    error_message = "lb_controller_iam_policy must be \"full\" or \"target_group_binding\"."
+  }
+}
+
 # --- gp3 StorageClass ---
 
 variable "gp3_iops" {
@@ -102,7 +126,7 @@ variable "external_secrets_chart_version" {
 }
 
 variable "secrets_name_prefix" {
-  description = "Secrets Manager name prefix the External Secrets Operator may read, e.g. \"stroom-proxy/prod/\". Must end with \"/\"."
+  description = "Secrets Manager name prefix for the deployment's secrets, e.g. \"stroom-proxy/prod/\". Must end with \"/\". Passed on to the workload stacks, whose own roles read their secrets under it; the External Secrets controller's role only assumes those roles."
   type        = string
 
   validation {
@@ -149,6 +173,18 @@ variable "internal_ca_namespace_label" {
   default     = { key = "stroom.gchq.github.io/internal-ca", value = "true" }
 }
 
+variable "internal_ca_additional_trusted_certificates" {
+  description = "PEM CA certificates published in the in-cluster CA's trust bundle alongside its current certificate. Empty normally; during a root rotation, the old CA certificate, so certificates it signed stay trusted until they are reissued."
+  type        = string
+  default     = ""
+  nullable    = false
+
+  validation {
+    condition     = var.internal_ca_additional_trusted_certificates == "" || strcontains(var.internal_ca_additional_trusted_certificates, "-----BEGIN CERTIFICATE-----")
+    error_message = "internal_ca_additional_trusted_certificates must be empty or PEM certificates (-----BEGIN CERTIFICATE-----)."
+  }
+}
+
 variable "stroom_operator" {
   description = <<-EOT
     Where the Stroom operator comes from.
@@ -163,7 +199,14 @@ variable "stroom_operator" {
                        local chart.
     image_repository : full image repository, e.g. an ECR repository holding a
                        build of this branch. null = gchq/stroom-k8s-operator.
-    image_tag        : image tag. null = the chart's appVersion.
+                       Required with the local charts.
+    image_tag        : image tag. null = the chart's appVersion. Required with
+                       the local charts.
+
+    The local charts' CRDs are newer than the released image their appVersion
+    names (gchq/stroom-k8s-operator:2.0.0), which ignores nodeNamePrefix and
+    the other new fields and would name Stroom nodes permanently wrong, so with
+    the local charts give the image of a matching build.
   EOT
   type = object({
     chart_repository = optional(string)
@@ -171,7 +214,17 @@ variable "stroom_operator" {
     image_repository = optional(string)
     image_tag        = optional(string)
   })
-  default = {}
+  default  = {}
+  nullable = false
+
+  validation {
+    condition = (
+      !var.stroom_enabled ||
+      var.stroom_operator.chart_repository != null ||
+      (var.stroom_operator.image_repository != null && var.stroom_operator.image_tag != null)
+    )
+    error_message = "With the operator charts from this repository (stroom_operator.chart_repository null), set stroom_operator.image_repository and image_tag to an operator image built from the same commit. The charts' default image (gchq/stroom-k8s-operator:2.0.0) is older than their CRDs and ignores nodeNamePrefix, so Stroom's node names would be wrong for good."
+  }
 }
 
 variable "tags" {

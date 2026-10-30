@@ -20,6 +20,11 @@ output "private_subnet_ids" {
   }
 }
 
+output "availability_zones" {
+  description = "Availability zones of the private subnets, in the same order (as given in azs: names or zone IDs)."
+  value       = local.create_vpc ? local.azs : data.aws_subnet.existing_private[*].availability_zone
+}
+
 output "public_subnet_ids" {
   description = "Public subnet IDs, for NAT gateways and internet-facing NLBs."
   value       = local.create_vpc ? module.vpc.public_subnets : var.existing_public_subnet_ids

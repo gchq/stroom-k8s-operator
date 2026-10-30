@@ -257,3 +257,86 @@ run "allows_first_tolerating_cloudwatch_addon" {
     cloudwatch_addon_version = "v1.7.0-eksbuild.1"
   }
 }
+
+run "module_isolates_external_secrets" {
+  command = plan
+
+  module {
+    source = "../../modules/platform"
+  }
+
+  variables {
+    cluster_name        = "stroom-proxy-test"
+    aws_region          = "eu-west-2"
+    vpc_id              = "vpc-0123456789abcdef0"
+    system_node_label   = { key = "workload", value = "system" }
+    secrets_name_prefix = "stroom-proxy/test/"
+  }
+
+  assert {
+    condition = (
+      length(data.aws_iam_policy_document.external_secrets.statement) == 1 &&
+      toset(data.aws_iam_policy_document.external_secrets.statement[0].actions) == toset(["sts:AssumeRole", "sts:TagSession"]) &&
+      toset(data.aws_iam_policy_document.external_secrets.statement[0].resources) == toset(["arn:aws:iam::123456789012:role/stroom-proxy-test-*"])
+    )
+    error_message = "The External Secrets controller's role must only assume the cluster's workload roles, not read secrets itself."
+  }
+
+  assert {
+    condition = (
+      yamldecode(helm_release.external_secrets.values[0]).rbac.aggregateToView == false &&
+      yamldecode(helm_release.external_secrets.values[0]).rbac.aggregateToEdit == false &&
+      yamldecode(helm_release.external_secrets.values[0]).rbac.aggregateToAdmin == false
+    )
+    error_message = "External Secrets must not aggregate its rights into the default view, edit and admin roles."
+  }
+
+  assert {
+    condition     = jsondecode(aws_iam_policy.lb_controller.policy) == jsondecode(file("../../modules/platform/lb-controller-iam-policy.json"))
+    error_message = "Expected the upstream load balancer controller policy by default."
+  }
+}
+
+run "module_minimal_lb_controller_policy" {
+  command = plan
+
+  module {
+    source = "../../modules/platform"
+  }
+
+  variables {
+    cluster_name             = "stroom-proxy-test"
+    aws_region               = "eu-west-2"
+    vpc_id                   = "vpc-0123456789abcdef0"
+    system_node_label        = { key = "workload", value = "system" }
+    secrets_name_prefix      = "stroom-proxy/test/"
+    lb_controller_iam_policy = "target_group_binding"
+  }
+
+  assert {
+    condition = alltrue([
+      for s in jsondecode(aws_iam_policy.lb_controller.policy).Statement :
+      alltrue([for a in s.Action : startswith(a, "elasticloadbalancing:Describe") || startswith(a, "ec2:Describe") || contains(["elasticloadbalancing:RegisterTargets", "elasticloadbalancing:DeregisterTargets"], a)])
+    ])
+    error_message = "The minimal policy may only describe and register/deregister targets."
+  }
+}
+
+run "module_rejects_unknown_lb_controller_policy" {
+  command = plan
+
+  module {
+    source = "../../modules/platform"
+  }
+
+  variables {
+    cluster_name             = "stroom-proxy-test"
+    aws_region               = "eu-west-2"
+    vpc_id                   = "vpc-0123456789abcdef0"
+    system_node_label        = { key = "workload", value = "system" }
+    secrets_name_prefix      = "stroom-proxy/test/"
+    lb_controller_iam_policy = "minimal"
+  }
+
+  expect_failures = [var.lb_controller_iam_policy]
+}

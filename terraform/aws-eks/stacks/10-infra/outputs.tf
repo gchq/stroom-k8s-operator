@@ -51,6 +51,11 @@ output "private_subnet_ids" {
   value       = module.network.private_subnet_ids
 }
 
+output "availability_zones" {
+  description = "Availability zones of the private subnets, in order. Record them in azs (new VPC), so a later plan can't pick different zones."
+  value       = module.network.availability_zones
+}
+
 output "public_subnet_ids" {
   description = "Public subnet IDs."
   value       = module.network.public_subnet_ids

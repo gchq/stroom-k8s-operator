@@ -15,13 +15,24 @@ variable "vpc_cidr" {
 }
 
 variable "az_count" {
-  description = "Number of availability zones to use for a new VPC."
+  description = "Number of availability zones to use for a new VPC. Ignored when azs is set."
   type        = number
   default     = 3
 
   validation {
     condition     = var.az_count >= 2 && var.az_count <= 4
     error_message = "az_count must be between 2 and 4."
+  }
+}
+
+variable "azs" {
+  description = "Availability zones for a new VPC, in order: names (\"eu-west-2a\") or zone IDs (\"euw2-az2\"). null = the first az_count zones available at plan time, which can change if a zone is impaired. For an existing cluster, pin the names from the availability_zones output (zone IDs for the same zones would replace the subnets); only ever append. Overrides az_count."
+  type        = list(string)
+  default     = null
+
+  validation {
+    condition     = var.azs == null || (try(length(var.azs), 0) >= 2 && try(length(var.azs), 0) <= 4 && try(length(distinct(var.azs)) == length(var.azs), false))
+    error_message = "azs must list 2-4 different availability zones (names or zone IDs), or be null."
   }
 }
 

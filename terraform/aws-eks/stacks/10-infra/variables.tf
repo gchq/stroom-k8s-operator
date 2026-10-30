@@ -29,9 +29,15 @@ variable "vpc_cidr" {
 }
 
 variable "az_count" {
-  description = "Number of availability zones for a new VPC (2-4)."
+  description = "Number of availability zones for a new VPC (2-4). Ignored when azs is set."
   type        = number
   default     = 3
+}
+
+variable "azs" {
+  description = "Availability zone names (e.g. [\"eu-west-2a\", \"eu-west-2b\", \"eu-west-2c\"]) or zone IDs (e.g. [\"euw2-az2\", ...]) for a new VPC, in order. null = the first az_count zones that are available at plan time, which can shift if a zone is impaired. Set it to the availability_zones output (names, not IDs, for an existing cluster: IDs would replace the subnets). Never reorder or remove entries: the node groups are keyed by position."
+  type        = list(string)
+  default     = null
 }
 
 variable "nat_gateway_mode" {
@@ -111,7 +117,7 @@ variable "system_node_instance_type" {
 }
 
 variable "system_node_count" {
-  description = "Number of system nodes."
+  description = "Number of system nodes. With stroom_node_sets, system_node_count × (pods per node − 7) must be at least 32, e.g. 2 × t3.large or m6i.large; the default 2 × t3.medium is for a proxy-only cluster."
   type        = number
   default     = 2
 }
@@ -151,8 +157,10 @@ variable "stroom_node_sets" {
   description = <<-EOT
     Stroom node groups by Stroom node set (e.g. proc, ui), for the 40-stroom
     stack. Empty (the default) for a cluster with only Stroom-Proxy. The keys
-    must match the node set names in 40-stroom, and node_count its counts. See
-    modules/eks/variables.tf for the fields.
+    must match the node set names in 40-stroom, and node_count its counts. Use
+    az_overrides to change one AZ group's AMI, Kubernetes version or instance
+    types at a time. With Stroom, the system nodes need at least 2 × t3.large
+    (see system_node_count). See modules/eks/variables.tf for the fields.
   EOT
   type = map(object({
     instance_types      = list(string)
@@ -160,6 +168,11 @@ variable "stroom_node_sets" {
     kubernetes_version  = string
     ami_release_version = optional(string)
     root_volume_gb      = optional(number, 50)
+    az_overrides = optional(map(object({
+      instance_types      = optional(list(string))
+      kubernetes_version  = optional(string)
+      ami_release_version = optional(string)
+    })), {})
   }))
   default = {}
 }

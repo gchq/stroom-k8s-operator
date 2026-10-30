@@ -11,12 +11,12 @@ output "external_secrets_namespace" {
 }
 
 output "external_secrets_role_arn" {
-  description = "IAM role of the External Secrets Operator."
+  description = "IAM role of the External Secrets Operator. Workload roles (named <cluster>-*) that read secrets trust it."
   value       = module.platform.external_secrets_role_arn
 }
 
 output "secrets_name_prefix" {
-  description = "Secrets Manager name prefix the External Secrets Operator may read. Create the proxy's secrets under it."
+  description = "Secrets Manager name prefix of the deployment's secrets. Create the proxy's (and Stroom's) secrets under it; the workload stacks' roles read them."
   value       = module.platform.secrets_name_prefix
 }
 

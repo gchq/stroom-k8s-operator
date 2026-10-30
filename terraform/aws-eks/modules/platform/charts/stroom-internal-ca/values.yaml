@@ -2,10 +2,14 @@
 caNamespace: cert-manager
 # Name of the CA ClusterIssuer that signs workload certificates, the CA Certificate, its Secret and the Bundle
 name: stroom-internal-ca
-# The CA certificate's lifetime and when cert-manager renews it. Workloads must trust the new CA before their
-# certificates are reissued from it.
+# The CA certificate's lifetime and when cert-manager renews it. Renewal keeps the private key
+# (rotationPolicy: Never), so certificates signed before a renewal stay trusted.
 duration: 87600h   # 10 years
 renewBefore: 8760h # 1 year
+# PEM CA certificates published in the bundle alongside the current CA certificate. To rotate the root to a
+# new key, put the old CA certificate here first, so workloads keep trusting certificates it signed until they
+# are reissued from the new one.
+additionalTrustedCertificates: ""
 # The trust bundle is written as a ConfigMap (key ca.crt) into each namespace with this label
 namespaceLabel:
   key: stroom.gchq.github.io/internal-ca

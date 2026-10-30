@@ -17,10 +17,12 @@ spec:
   secretName: {{ .Values.name }}
   duration: {{ .Values.duration }}
   renewBefore: {{ .Values.renewBefore }}
+  # Renewal keeps the key, so the renewed CA certificate has the same subject and key and every certificate
+  # it signed stays trusted. A new key (a new root) is a planned rotation; see additionalTrustedCertificates.
   privateKey:
     algorithm: ECDSA
     size: 256
-    rotationPolicy: Always
+    rotationPolicy: Never
   issuerRef:
     group: cert-manager.io
     kind: ClusterIssuer
@@ -46,6 +48,11 @@ spec:
     - secret:
         name: {{ .Values.name }}
         key: ca.crt
+    {{- with .Values.additionalTrustedCertificates }}
+    # Other CA certificates trusted alongside the current one, e.g. the previous root during a rotation
+    - inLine: |
+        {{- . | trim | nindent 8 }}
+    {{- end }}
   target:
     configMap:
       key: ca.crt

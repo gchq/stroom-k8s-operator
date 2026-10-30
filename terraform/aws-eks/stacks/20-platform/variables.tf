@@ -21,6 +21,12 @@ variable "lb_controller_chart_version" {
   default     = "3.6.2"
 }
 
+variable "lb_controller_iam_policy" {
+  description = "\"full\" (the upstream policy, the default) or \"target_group_binding\" (describe and register/deregister targets only). See modules/platform/variables.tf; verify the minimal one on a cluster before relying on it."
+  type        = string
+  default     = "full"
+}
+
 # --- gp3 StorageClass ---
 
 variable "gp3_iops" {
@@ -95,8 +101,14 @@ variable "metrics_server_chart_version" {
   default     = "3.14.0"
 }
 
+variable "internal_ca_additional_trusted_certificates" {
+  description = "PEM CA certificates trusted alongside the in-cluster CA's current one (its trust bundle). Empty normally; the old CA certificate while rotating the root."
+  type        = string
+  default     = ""
+}
+
 variable "stroom_operator" {
-  description = "Where the Stroom operator's charts and image come from. The defaults use this repository's charts and the gchq/stroom-k8s-operator image of the chart's appVersion. See modules/platform/variables.tf."
+  description = "Where the Stroom operator's charts and image come from. chart_repository null = this repository's charts, which then need image_repository and image_tag (an operator image built from the same commit; the charts' default 2.0.0 image is older than their CRDs). See modules/platform/variables.tf."
   type = object({
     chart_repository = optional(string)
     chart_version    = optional(string)

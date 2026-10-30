@@ -26,6 +26,7 @@ module "platform" {
   system_node_label = local.infra.system_node_label
 
   lb_controller_chart_version = var.lb_controller_chart_version
+  lb_controller_iam_policy    = var.lb_controller_iam_policy
 
   gp3_iops        = var.gp3_iops
   gp3_throughput  = var.gp3_throughput
@@ -45,4 +46,6 @@ module "platform" {
   trust_manager_chart_version  = var.trust_manager_chart_version
   metrics_server_chart_version = var.metrics_server_chart_version
   stroom_operator              = var.stroom_operator
+
+  internal_ca_additional_trusted_certificates = var.internal_ca_additional_trusted_certificates
 }

@@ -6,4 +6,4 @@ description: >-
   namespaces. Installed by Terraform after cert-manager and trust-manager, as their custom resources can't be
   planned before their CRDs exist.
 type: application
-version: 1.0.0
+version: 1.1.0
