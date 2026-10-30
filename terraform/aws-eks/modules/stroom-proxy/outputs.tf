@@ -76,3 +76,33 @@ output "namespace" {
   description = "Kubernetes namespace of the proxies."
   value       = kubernetes_namespace_v1.proxy.metadata[0].name
 }
+
+output "data_events_queue_arn" {
+  description = "ARN of the SQS queue announcing new data objects, or null without one."
+  value       = try(aws_sqs_queue.data_events[0].arn, null)
+}
+
+output "data_events_dlq_url" {
+  description = "SQS dead-letter queue for data events that couldn't be processed, or null without one."
+  value       = try(aws_sqs_queue.data_events_dlq[0].url, null)
+}
+
+output "data_events_dlq_arn" {
+  description = "ARN of the dead-letter queue, or null without one."
+  value       = try(aws_sqs_queue.data_events_dlq[0].arn, null)
+}
+
+output "data_bucket_kms_key_arn" {
+  description = "KMS key that encrypts the data bucket, or null for SSE-S3."
+  value       = local.data_kms_key_arn
+}
+
+output "data_retention_days" {
+  description = "Object Lock retention of the data bucket, in days."
+  value       = var.data_retention_days
+}
+
+output "data_expire_after_days" {
+  description = "Days after which the data bucket's lifecycle rule deletes objects, or null if this stack doesn't expire them (never, or the bucket is managed elsewhere, whose own rules then apply). A downstream Stroom's raw data retention must not be longer."
+  value       = local.create_data_bucket && var.data_expire_after_retention ? var.data_retention_days + 1 : null
+}

@@ -17,12 +17,15 @@ terraform/aws-eks/
 ├── modules/
 │   ├── network/          # VPC, subnets, NAT gateways, optional VPC endpoints (or an existing VPC)
 │   ├── eks/              # EKS cluster, system and proxy node groups, add-ons
-│   ├── platform/         # LB controller, gp3 StorageClass, CloudWatch, External Secrets
-│   └── stroom-proxy/     # buckets, ALB, NLBs, PrivateLink, IAM, Kubernetes objects, Helm releases
+│   ├── platform/         # LB controller, gp3 StorageClass, CloudWatch, External Secrets (+ Stroom's)
+│   ├── stroom-proxy/     # buckets, ALB, NLBs, PrivateLink, IAM, Kubernetes objects, Helm releases
+│   ├── stroom-db/        # RDS for MySQL 8.4 for Stroom
+│   └── stroom/           # Stroom: EFS, ALB, IAM, secrets, StroomCluster, init and bootstrap Jobs
 ├── stacks/
 │   ├── 10-infra/         # network + eks
 │   ├── 20-platform/      # platform, reading 10-infra's outputs from its state
-│   └── 30-stroom-proxy/  # the proxy, reading both earlier stacks' outputs
+│   ├── 30-stroom-proxy/  # the proxy, reading both earlier stacks' outputs
+│   └── 40-stroom/        # Stroom, reading 10, 20 and (with the proxy) 30
 ├── envs/
 │   ├── example/          # backend config and tfvars for one environment
 │   └── dev/              # a small test environment, with an apply and test checklist
@@ -190,6 +193,66 @@ downstream, a receipt mode that needs a downstream without one, certificate
 auth without a CA bundle, more replicas than the colour has nodes, a colour
 without nodes, an S3 key template without `${uuid}` or `${receiptId}`, an
 image without a digest, and more.
+
+## What `40-stroom` creates
+
+Stroom on the cluster's Stroom node groups, deployed by the Stroom operator
+(design [`stroom-eks-terraform-design.md`](../../design/stroom-eks-terraform-design.md)).
+It needs `10-infra` with `stroom_node_sets` and `20-platform` applied after
+it. **Written and tested with plans only; not yet applied.**
+
+* **Database** (`modules/stroom-db`): RDS for MySQL 8.4, Multi-AZ, encrypted
+  with its own KMS key, private, TLS required, automated backups, a final
+  snapshot and deletion protection. RDS manages the master password in Secrets
+  Manager. The Stroom user's password is generated as an ephemeral value and
+  written with a write-only argument, so neither password is in Terraform
+  state. A database init Job (MySQL client, verified TLS) creates the `stroom`
+  and `stats` schemas and the user.
+* **Stream volume**: an EFS file system (elastic throughput, KMS, AWS Backup)
+  with a mount target per AZ and a uid/gid 1000 access point, bound by a static
+  PersistentVolume and mounted on every node at `/stroom/stream`.
+* **Namespace** `stroom` with the `restricted` Pod Security level, ALB
+  readiness gates and the in-cluster CA's ConfigMap; a NetworkPolicy allowing
+  only the ALB, the other Stroom nodes and (with the proxy) the proxy
+  namespace to reach 8443, and the ALB and the nodes to reach 8081.
+* **Secrets** through External Secrets: the database user's password (in the
+  form the operator expects), the RDS master credentials (for the init Job:
+  this stack lets the External Secrets role read that one secret), the OIDC
+  client secret, and a keystore password generated in the cluster once. The
+  nodes' certificate comes from the in-cluster CA (cert-manager), covering
+  every node set's Services and pods.
+* **IAM** (Pod Identity): Stroom's role reads the data bucket and consumes its
+  queue (send to the DLQ, decrypt with its key); the bootstrap Job's role can
+  only write the proxy's API key secret.
+* **ALB**: internal, HTTPS with an ACM certificate (the same four sources as
+  the proxy), HTTP redirected, sticky sessions (`STROOM_SESSION_ID`), HTTPS to
+  the Frontend node set's pods with health checks on 8081, and cluster calls
+  and `/datafeed` refused with 403. Optional Route 53 alias.
+* **The StroomCluster**: node names `<node_name_prefix>-<node set>-<n>`, the
+  removal guard on, each node set on its own nodes (one pod per node, spread
+  over the AZs, PodDisruptionBudget), uid 1000, temp, reference data and
+  search results on NVMe, index volumes on the gp3 data volume, the heap as a
+  percentage of the memory limit, verified TLS to RDS, HTTPS between nodes,
+  and `EXTERNAL_IDP` with the `entra`, `keycloak` or `cognito` preset.
+  Stroom's `config.yml` is rendered from the operator's, adding S3 event
+  ingest, the identity provider, HTTPS node URIs and the volume settings; its
+  keys are checked with Stroom 7.14's own config check.
+* **Bootstrap Job**, once the nodes are up, idempotent: the first
+  administrator (by IdP subject), the `stroom-proxy` user and its API key
+  (written to Secrets Manager, with the proxy), the `S3_V1_READ_ONLY` volume
+  for the data bucket, and the S3 event poll job. Stroom creates the stream and
+  index volumes itself, from `config.yml`.
+
+Plan-time checks refuse: raw data retention longer than the bucket's expiry, a
+node set without node groups in `10-infra` or with more pods than nodes, a
+cluster without Stroom's platform components, and a Stroom-only cluster
+without an `ingest` bucket.
+
+With the proxy, the first build applies `30-stroom-proxy` twice (design 4.3):
+after `40-stroom`, set the proxy's `downstream` from this stack's
+`proxy_downstream` output and `receipt.check_mode = "RECEIPT_POLICY"`. The
+proxy must also trust the in-cluster CA, which needs a proxy chart change (not
+done yet).
 
 ## Prerequisites
 
@@ -387,6 +450,17 @@ tests check that a proxy-only cluster (including a `10-infra` state from
 before Stroom) gets none of Stroom's components, and a cluster with Stroom
 node sets gets them all, on the system nodes, with the operator from this
 repository's charts or from a given repository and image.
+
+`40-stroom`'s tests check the stack's wiring (with the proxy, Stroom only
+with and without an `ingest` bucket, a cluster without Stroom's components),
+and in the modules: the rendered `config.yml` (S3 ingest, the Entra and
+Keycloak presets, HTTPS cluster calls trusting the in-cluster CA for that
+client only, volume paths, Stroom's own placeholders kept), the StroomCluster
+(node sets, heap percentages, placement, image digest, database TLS, HTTPS,
+volumes), the ALB's stickiness and refusals, the database settings, and every
+plan-time check. `stroom_cluster_manifest` (a module output) can be checked
+against the operator's CRDs with `kubectl apply --dry-run=server
+--validate=strict`.
 
 `30-stroom-proxy`'s tests check the stack's wiring, and, in the module: the
 rendered proxy config and Helm values (types preserved, unique S3 keys, a

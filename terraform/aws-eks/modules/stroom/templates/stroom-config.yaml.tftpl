@@ -1,0 +1,192 @@
+# Stroom configuration file
+# =========================
+
+# For information on the structure of this configuration file see:
+# https://www.dropwizard.io/en/latest/manual/configuration.html
+# For information on the logback logFormat strings see:
+# http://logback.qos.ch/manual/layouts.html
+
+# Rendered by terraform/aws-eks/modules/stroom from the operator's
+# internal/controller/static_content/stroomcluster-config-https.yaml, with:
+# HTTPS node URIs, the external identity provider, S3 event ingest and the
+# volume settings for EKS. Keep the two in step.
+
+server:
+  applicationContextPath: "$${APPLICATION_CONTEXT_PATH:-/}"
+  adminContextPath: "$${ADMIN_CONTEXT_PATH:-/stroomAdmin}"
+  applicationConnectors:
+    - type: http
+      port: $${STROOM_APP_HTTP_PORT:-8080}
+    - type: https
+      port: $${STROOM_APP_HTTPS_PORT:-8443}
+      keyStoreType: PKCS12
+      keyStorePath: /stroom/pki/tls/keystore.p12
+      keyStorePassword: $${STROOM_KEYSTORE_PASSWORD}
+      trustStoreType: PKCS12
+      trustStorePath: /stroom/pki/tls/truststore.p12
+      trustStorePassword: $${STROOM_KEYSTORE_PASSWORD}
+      validateCerts: false
+  adminConnectors:
+    - type: http
+      port: $${STROOM_ADMIN_PORT:-8081}
+
+  requestLog:
+    appenders:
+      # Log appender for the web server request logging
+      - type: file
+        currentLogFilename: logs/access/access.log
+        threshold: ALL
+        queueSize: 256
+        discardingThreshold: 0
+        archive: true
+        # Rolled and gzipped every minute
+        archivedLogFilenamePattern: logs/access/access-%d{yyyy-MM-dd'T'HH:mm}.log.gz
+        archivedFileCount: 100
+        timeZone: UTC
+        logFormat: '%h %l "%u" [%t] "%r" %s %b "%i{Referer}" "%i{User-Agent}" %D'
+
+logging:
+  level: "$${STROOM_LOGGING_LEVEL:-WARN}"
+  loggers:
+    stroom: INFO
+    io.dropwizard: INFO
+    org.eclipse.jetty: INFO
+    org.glassfish: INFO
+    org.glassfish.jersey: INFO
+    # Comment this out if you want logging of the REST request/responses
+    # NOT recommended for production environments as it is very verbose
+    org.glassfish.jersey.logging.LoggingFeature: "OFF"
+    #    org.glassfish.jersey.server.ServerRuntime.Responder: INFO
+    #    org.glassfish.jersey.server.validation.internal.ValidationExceptionMapper: FINER
+    org.flywaydb: INFO
+    # Logger and appender for audit logs
+    "event-logger":
+      level: INFO
+      additive: false
+      appenders:
+        - type: file
+          currentLogFilename: logs/user/user.log
+          threshold: ALL
+          queueSize: 256
+          discardingThreshold: 0
+          archive: true
+          # Rolled every minute
+          archivedLogFilenamePattern: logs/user/user-%d{yyyy-MM-dd'T'HH:mm}.log
+          archivedFileCount: 100
+          timeZone: UTC
+          logFormat: "%msg%n"
+    # Logger and appender for the flyway DB migration SQL output
+    org.flywaydb.core.internal.sqlscript:
+      level: DEBUG
+      additive: false
+      appenders:
+        - type: file
+          currentLogFilename: logs/migration/migration.log
+          threshold: ALL
+          queueSize: 256
+          discardingThreshold: 0
+          archive: true
+          # Rolled every day
+          archivedLogFilenamePattern: logs/migration/migration-%d{yyyy-MM-dd}.log
+          archivedFileCount: 10
+          timeZone: UTC
+          logFormat: "%-6level [%d{\"yyyy-MM-dd'T'HH:mm:ss.SSS'Z'\",UTC}] [%t] %logger - %X{code} %msg %n"
+
+  appenders:
+    # stdout for docker
+    - type: console
+      # Multi-coloured log format for console output
+      logFormat: "%highlight(%-6level) [%d{\"yyyy-MM-dd'T'HH:mm:ss.SSS'Z'\",UTC}] [%green(%t)] %cyan(%logger) - %X{code} %msg %n"
+      timeZone: UTC
+
+    # Minute rolled files for stroom/datafeed, will be curl'd/deleted by stroom-log-sender
+    - type: file
+      currentLogFilename: logs/app/app.log
+      threshold: ALL
+      queueSize: 256
+      discardingThreshold: 0
+      archive: true
+      # Rolled and gzipped every minute
+      archivedLogFilenamePattern: logs/app/app-%d{yyyy-MM-dd'T'HH:mm}.log.gz
+      # One week using minute files
+      archivedFileCount: 10080
+      timeZone: UTC
+      logFormat: "%-6level [%d{\"yyyy-MM-dd'T'HH:mm:ss.SSS'Z'\",UTC}] [%t] %logger - %X{code} %msg %n"
+
+# Cluster calls between nodes (the STROOM client) go to the other nodes' HTTPS
+# connectors, whose certificates come from the in-cluster CA: trust the
+# truststore the operator builds from it. Only for this client: a trust store
+# replaces the JVM's CAs, and the OPEN_ID client must still trust the IdP's
+# public CA. No DEFAULT entry, which the others would inherit.
+jerseyClients:
+  STROOM:
+    tls:
+      trustStorePath: /stroom/pki/tls/truststore.p12
+      trustStoreType: PKCS12
+      trustStorePassword: "$${STROOM_KEYSTORE_PASSWORD}"
+      verifyHostname: true
+
+# This section contains the Stroom configuration properties
+# For more information see:
+# https://gchq.github.io/stroom-docs/user-guide/properties.html
+
+appConfig:
+  commonDbDetails:
+    connection:
+      jdbcDriverClassName: "$${STROOM_JDBC_DRIVER_CLASS_NAME:-com.mysql.cj.jdbc.Driver}"
+      jdbcDriverUrl: "$${STROOM_JDBC_DRIVER_URL:-jdbc:mysql://localhost:3307/stroom?useUnicode=yes&characterEncoding=UTF-8}"
+      jdbcDriverUsername: "$${STROOM_JDBC_DRIVER_USERNAME:-stroomuser}"
+      jdbcDriverPassword: "$${STROOM_JDBC_DRIVER_PASSWORD:-stroompassword1}"
+  # The shared stream volume on EFS, created by the first node to start, in the
+  # default volume group (design 5.3)
+  data:
+    filesystemVolume:
+      createDefaultStreamVolumesOnStart: true
+      defaultStreamVolumePaths: ["${stream_volume_path}"]
+  node:
+    name: "$${STROOM_NODE:-node1a}"
+  nodeUri:
+    # Cluster calls go to the other nodes' HTTPS connectors (design 9.1)
+    scheme: https
+    hostname: "$${POD_HOSTNAME}.$${POD_SUBDOMAIN}"
+    port: $${STROOM_APP_HTTPS_PORT:-8443}
+  path:
+    home: "/stroom"
+    temp: "$${STROOM_TEMP:-/tmp/stroom}"
+  publicUri:
+    hostname: "$${API_GATEWAY_HOST:-localhost}"
+    port: "$${API_GATEWAY_PORT:-443}"
+  receive:
+    # Ingest from the proxy's data bucket, announced on its SQS queue (design 7.2).
+    # No credentials: the default chain uses the pod's EKS Pod Identity role.
+    s3Event:
+      sqs:
+        awsRegionName: "${aws_region}"
+        queueUrl: "${queue_url}"
+        deadLetterQueueUrl: "${dlq_url}"
+  security:
+    authentication:
+      # The proxy's and the bootstrap Job's keys (design 5.4, 8.1)
+      maxApiKeyExpiryAge: 365d
+      openId:
+        ${indent(8, open_id)}
+      preventLogin: false
+    identity:
+  statistics:
+    internal:
+      enabledStoreTypes: $${STROOM_ENABLED_STAT_STORE_TYPES:-[ "StatisticStore" ]}
+    sql:
+      db:
+        connection:
+          jdbcDriverClassName: "$${STROOM_STATISTICS_JDBC_DRIVER_CLASS_NAME:-com.mysql.cj.jdbc.Driver}"
+          jdbcDriverUrl: "$${STROOM_STATISTICS_JDBC_DRIVER_URL:-jdbc:mysql://localhost:3307/stats?useUnicode=yes&characterEncoding=UTF-8}"
+          jdbcDriverUsername: "$${STROOM_STATISTICS_JDBC_DRIVER_USERNAME:-statsuser}"
+          jdbcDriverPassword: "$${STROOM_STATISTICS_JDBC_DRIVER_PASSWORD:-stroompassword1}"
+  # Each node creates its own index volume, on its data volume, in the default
+  # index volume group when it first starts (design 5.1)
+  volumes:
+    createDefaultIndexVolumesOnStart: true
+    defaultIndexVolumeGroupPaths: ["${index_volume_path}"]
+%{ if extra_app_config != "" ~}
+  ${indent(2, extra_app_config)}
+%{ endif ~}
