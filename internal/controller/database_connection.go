@@ -25,6 +25,7 @@ func GetDatabaseConnectionInfo(client client.Client, ctx context.Context, dbRef 
 		dbConnectionInfo.Host = dbRef.ServerAddress.Host
 		dbConnectionInfo.Port = dbRef.ServerAddress.Port
 		dbConnectionInfo.SecretName = dbRef.ServerAddress.SecretName
+		dbConnectionInfo.Tls = dbRef.ServerAddress.Tls
 		dbConnectionInfo.UserName = dbRef.UserName
 	} else {
 		// If the ServerRef namespace is empty, try to find the DatabaseServer in the same namespace as the owner
@@ -48,6 +49,7 @@ func GetDatabaseConnectionInfo(client client.Client, ctx context.Context, dbRef 
 			dbConnectionInfo.Host = dbServer.GetServiceFqdn()
 			dbConnectionInfo.Port = DatabasePort
 			dbConnectionInfo.SecretName = dbServer.GetSecretName()
+			dbConnectionInfo.Tls = nil
 			dbConnectionInfo.UserName = dbRef.UserName
 		}
 	}
@@ -65,13 +67,29 @@ func OpenDatabase(client client.Reader, ctx context.Context, dbInfo *DatabaseCon
 		return nil, err
 	}
 
+	var caCertificates []byte
+	if dbInfo.Tls != nil && dbInfo.Tls.CaCertificates != nil {
+		ref := dbInfo.Tls.CaCertificates
+		configMap := v1.ConfigMap{}
+		if err := client.Get(ctx, types.NamespacedName{Namespace: secretNamespace, Name: ref.ConfigMapName}, &configMap); err != nil {
+			logger.Error(err, fmt.Sprintf("Could not retrieve the database CA certificates from ConfigMap '%v'", ref.ConfigMapName))
+			return nil, err
+		}
+		caCertificates = []byte(configMap.Data[ref.Key])
+	}
+
 	password := string(dbSecret.Data[dbInfo.UserName])
-	if db, err := sql.Open("mysql", dataSourceName(dbInfo, password, databaseName)); err != nil {
+	config, err := databaseConfig(dbInfo, password, databaseName, caCertificates)
+	if err != nil {
+		logger.Error(err, "Could not configure the database connection", "HostName", dbInfo.Host, "Database", databaseName)
+		return nil, err
+	}
+	connector, err := mysql.NewConnector(config)
+	if err != nil {
 		logger.Error(err, "Could not connect to database", "HostName", dbInfo.Host, "Database", databaseName, "User", dbInfo.UserName)
 		return nil, err
-	} else {
-		return db, nil
 	}
+	return sql.OpenDB(connector), nil
 }
 
 func CloseDatabase(database *sql.DB) {
@@ -80,16 +98,18 @@ func CloseDatabase(database *sql.DB) {
 	}
 }
 
-// dataSourceName returns the MySQL data source name for a database. TLS is used if the server supports it, so the
-// password isn't sent in clear text. The server's certificate isn't verified, as MySQL servers generate their own by
-// default.
-func dataSourceName(dbInfo *DatabaseConnectionInfo, password string, databaseName string) string {
+// databaseConfig returns the MySQL connection settings for a database. Unless the connection's TLS settings say
+// otherwise, TLS is used if the server supports it, so the password isn't sent in clear text, and the server's
+// certificate isn't verified, as MySQL servers generate their own by default.
+func databaseConfig(dbInfo *DatabaseConnectionInfo, password string, databaseName string, caCertificates []byte) (*mysql.Config, error) {
 	config := mysql.NewConfig()
 	config.User = dbInfo.UserName
 	config.Passwd = password
 	config.Net = "tcp"
 	config.Addr = net.JoinHostPort(dbInfo.Host, strconv.Itoa(int(dbInfo.Port)))
 	config.DBName = databaseName
-	config.TLSConfig = "preferred"
-	return config.FormatDSN()
+	if err := configureDatabaseTls(config, dbInfo.Host, dbInfo.Tls, caCertificates); err != nil {
+		return nil, err
+	}
+	return config, nil
 }

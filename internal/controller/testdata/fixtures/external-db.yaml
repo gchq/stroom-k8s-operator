@@ -1,0 +1,46 @@
+# A StroomCluster using an external database server over verified TLS, with Pods that meet the `restricted` Pod
+# Security Standard
+apiVersion: stroom.gchq.github.io/v1
+kind: StroomCluster
+metadata:
+  name: external-db
+spec:
+  image:
+    repository: gchq/stroom
+    tag: v7.14.0
+  databaseServerRef:
+    serverAddress:
+      host: stroom.abcdefghijkl.eu-west-2.rds.amazonaws.com
+      secretName: stroom-db
+      tls:
+        mode: VerifyIdentity
+        caCertificates:
+          configMapName: rds-ca
+          key: global-bundle.pem
+  openId:
+    clientId: stroom
+    clientSecret:
+      secretName: stroom-openid
+      key: client-secret
+  ingress:
+    hostName: stroom.example.com
+  nodeSets:
+    - name: proc
+      count: 1
+      role: Processing
+      ingressEnabled: false
+      localDataVolumeClaim: {}
+      resources: {}
+      memoryOptions:
+        initialPercentage: 50
+        maxPercentage: 75
+      podSecurityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      securityContext:
+        capabilities:
+          drop:
+            - ALL

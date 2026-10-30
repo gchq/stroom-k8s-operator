@@ -375,13 +375,16 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 		volumeMounts = append(volumeMounts, nodeSet.ExtraVolumeMounts...)
 	}
 
-	var initContainers []corev1.Container
+	// Init containers run with the Stroom container's security settings, so they meet the same Pod Security level
+	dbTruststoreVolumes, initContainers, dbTruststoreMounts := dbTruststore(stroomCluster, dbInfo, nodeSet.SecurityContext)
+	volumes = append(volumes, dbTruststoreVolumes...)
+	volumeMounts = append(volumeMounts, dbTruststoreMounts...)
 	if !stroomCluster.Spec.Https.IsZero() {
 		initContainers = append(initContainers, corev1.Container{
 			Name:            "generate-keystore",
 			Image:           stroomCluster.Spec.Image.String(),
 			ImagePullPolicy: stroomCluster.Spec.ImagePullPolicy,
-			SecurityContext: containerSecurityContext(corev1.SecurityContext{}),
+			SecurityContext: containerSecurityContext(nodeSet.SecurityContext),
 			Command: []string{
 				"sh",
 				"-c",

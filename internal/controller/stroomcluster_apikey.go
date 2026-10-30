@@ -111,6 +111,10 @@ func (r *StroomClusterReconciler) createApiKeyJob(stroomCluster *stroomv1.Stroom
 	}}
 	r.appendConfigVolumeMounts(stroomCluster, &volumeMounts)
 
+	dbTruststoreVolumes, initContainers, dbTruststoreMounts := dbTruststore(stroomCluster, dbInfo, nodeSet.SecurityContext)
+	volumes = append(volumes, dbTruststoreVolumes...)
+	volumeMounts = append(volumeMounts, dbTruststoreMounts...)
+
 	var backoffLimit int32 = 3
 	var activeDeadlineSeconds int64 = 1200
 	var ttlSecondsAfterFinished int32 = 3600
@@ -134,10 +138,11 @@ func (r *StroomClusterReconciler) createApiKeyJob(stroomCluster *stroomv1.Stroom
 					// Run as the Stroom node ServiceAccount, so the Job is subject to the same security constraints (e.g.
 					// OpenShift SCCs) as the nodes, without needing any extra setup
 					ServiceAccountName: stroomCluster.GetBaseName(),
-					SecurityContext:    &nodeSet.PodSecurityContext,
+					SecurityContext:    podSecurityContext(nodeSet.PodSecurityContext),
 					NodeSelector:       nodeSet.NodeSelector,
 					Affinity:           &nodeSet.Affinity,
 					Tolerations:        nodeSet.Tolerations,
+					InitContainers:     initContainers,
 					Containers: []corev1.Container{{
 						Name:            ApiKeyJobContainerName,
 						Image:           stroomCluster.Spec.Image.String(),
@@ -149,7 +154,7 @@ func (r *StroomClusterReconciler) createApiKeyJob(stroomCluster *stroomv1.Stroom
 						},
 						Env:             env,
 						VolumeMounts:    volumeMounts,
-						SecurityContext: &nodeSet.SecurityContext,
+						SecurityContext: containerSecurityContext(nodeSet.SecurityContext),
 						Resources: corev1.ResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceCPU:    resource.MustParse("250m"),

@@ -13,6 +13,13 @@
 - NodeSets can set `topologySpreadConstraints` (a constraint without a label selector selects the NodeSet's own Pods)
   and `podDisruptionBudget` (`maxUnavailable`, default 1), which creates a PodDisruptionBudget for the NodeSet. The
   operator's ClusterRole gains PodDisruptionBudget permissions.
+- An external database connection can verify the server's certificate: `serverAddress.tls` sets the TLS mode
+  (`Disabled`, `Preferred`, `Required`, `VerifyCA` or `VerifyIdentity`, MySQL's `sslMode`) and, optionally, a
+  ConfigMap key holding the CA certificates, such as the Amazon RDS bundle. Stroom's JDBC URLs and the operator's
+  own connections both use them; an init container turns the certificates into a truststore for Stroom.
+- The init containers of Stroom pods, and the API key Job, run with the node set's security contexts (the Job also
+  with the operator's defaults), so a node set set up for the `restricted` Pod Security Standard gives pods that
+  all meet it.
 - NodeSets can move Stroom's working directories off the local data volume with `directories` (`tmp`,
   `referenceData`, `searchResults`, `lmdb`, `planb`, …): a directory with an `emptyDir` gets a volume of its own on the
   node's ephemeral storage, for example instance-store NVMe, with an optional `sizeLimit`. Directories not set stay

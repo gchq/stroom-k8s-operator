@@ -45,18 +45,54 @@ spec:
 Don't set `serverRef` as well: if `serverRef` is set, the operator uses the `DatabaseServer` and ignores
 `serverAddress`.
 
+## 4. Verify the server's certificate (optional)
+
+By default, the operator and Stroom use TLS when the server supports it, which MySQL 8 does by default, so passwords
+aren't sent in clear text, but neither checks the server's certificate. To check it, set `tls`, and put the PEM
+certificates of the CAs that issue the server's certificate in a ConfigMap in the `StroomCluster`'s namespace:
+
+```shell
+curl -sSfo global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+kubectl -n stroom create configmap rds-ca --from-file=global-bundle.pem
+```
+
+```yaml
+    serverAddress:
+      host: stroom.abcdefghijkl.eu-west-2.rds.amazonaws.com
+      secretName: stroom-db-credentials
+      tls:
+        mode: VerifyIdentity      # default
+        caCertificates:           # optional
+          configMapName: rds-ca
+          key: global-bundle.pem
+```
+
+| `mode` | TLS | Checks the certificate's CA | Checks the host name |
+|---|---|---|---|
+| `Disabled` | no | | |
+| `Preferred` | if the server supports it | no | no |
+| `Required` | yes | no | no |
+| `VerifyCA` | yes | yes | no |
+| `VerifyIdentity` | yes | yes | yes |
+
+The modes are MySQL's `sslMode`. Without `caCertificates`, Stroom trusts the Java runtime's CAs and the operator
+the CAs in its image, which don't include private CAs such as Amazon RDS's. With `caCertificates`, an init
+container in each Stroom Pod turns the certificates into a PKCS12 truststore for Stroom, which the JDBC URL points
+at, and the operator reads the same ConfigMap for its own connections. A ConfigMap that
+[trust-manager](https://cert-manager.io/docs/trust/trust-manager/) writes from a `Bundle` works too. After changing
+the certificates, restart the nodes.
+
 ## Things to know
 
 - **Network access.** The operator Pod, as well as the Stroom Pods, connects to the database: it drains the cluster
   through the database when the `StroomCluster` is deleted, and the autoscaler reads and sets task limits there.
-- **TLS.** The operator and Stroom both use TLS when the server supports it, which MySQL 8 does by default, so
-  passwords aren't sent in clear text. Neither verifies the server's certificate, as MySQL servers generate their
-  own by default. If you need certificate verification for Stroom's connections, configure it in your own
-  [configuration](../configuration/stroom-config.md).
+- **TLS.** See [step 4](#4-verify-the-servers-certificate-optional). The settings apply to the Stroom nodes, the
+  API key Job and the operator.
 - **Password changes.** The password is read from the Secret when each Pod starts. After changing it, update the
   Secret and restart the nodes; see [Rolling restarts](../operations/node-lifecycle.md#rolling-restarts).
 - **Backups.** A [`DatabaseBackup`](backups.md) can back up an external server too, but your database service's own
-  backups are usually a better choice.
+  backups are usually a better choice. It doesn't use the `tls` settings: `mysqldump` uses TLS if the server supports
+  it, without checking the certificate.
 
 The [`external-database`](https://github.com/gradata-systems/stroom-k8s-operator/tree/master/samples/external-database)
 sample is a complete deployment using an external server.

@@ -108,6 +108,20 @@ StroomTaskAutoscaler adjusts the task limit of a Stroom job on a StroomCluster's
 Types used within the resources above, in alphabetical order.
 
 
+### ConfigMapKeyRef
+
+
+ConfigMapKeyRef selects a key of a ConfigMap in the same namespace
+
+
+_Appears in:_ [DatabaseTls](#databasetls)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `configMapName` _string_ | ConfigMapName is the name of the ConfigMap |  | MinLength: 1 |
+| `key` _string_ | Key is the ConfigMap key |  | MinLength: 1 |
+
+
 ### ConfigMapRef
 
 
@@ -204,6 +218,39 @@ _Appears in:_ [DatabaseServer](#databaseserver)
 | `state` _string_ |  |  |  |
 | `address` _string_ |  |  |  |
 | `port` _integer_ |  |  |  |
+
+
+### DatabaseTls
+
+
+
+
+
+_Appears in:_ [ServerAddress](#serveraddress)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `mode` _[DatabaseTlsMode](#databasetlsmode)_ | Mode is how connections use TLS | `VerifyIdentity` | Enum: [Disabled Preferred Required VerifyCA VerifyIdentity] |
+| `caCertificates` _[ConfigMapKeyRef](#configmapkeyref)_ | CaCertificates selects a ConfigMap key holding the PEM certificates of the CAs to trust for the server's<br />certificate, such as the Amazon RDS global bundle or a trust-manager Bundle. Unset, the CAs trusted by the Java<br />runtime (for Stroom) and the operator's image are used. |  | Optional |
+
+
+### DatabaseTlsMode
+
+_Underlying type:_ string
+
+DatabaseTlsMode is how a database connection uses TLS, as MySQL's `sslMode`
+
+_Validation:_ Enum: [Disabled Preferred Required VerifyCA VerifyIdentity]
+
+_Appears in:_ [DatabaseTls](#databasetls)
+
+| Value | Description |
+| --- | --- |
+| `Disabled` | DatabaseTlsDisabled doesn't use TLS<br /> |
+| `Preferred` | DatabaseTlsPreferred uses TLS if the server supports it, without checking the server's certificate<br /> |
+| `Required` | DatabaseTlsRequired requires TLS, without checking the server's certificate<br /> |
+| `VerifyCA` | DatabaseTlsVerifyCA requires TLS and a server certificate issued by a trusted CA<br /> |
+| `VerifyIdentity` | DatabaseTlsVerifyIdentity requires TLS and a server certificate issued by a trusted CA for the server's host name<br /> |
 
 
 ### DirectoryVolume
@@ -513,6 +560,7 @@ _Appears in:_ [DatabaseServerRef](#databaseserverref)
 | `host` _string_ | Host is the hostname or IP of the database server |  |  |
 | `port` _integer_ | Port number the database server is listening on | `3306` |  |
 | `secretName` _string_ | SecretName is the name of the Secret containing the database user's password, under a key named after the<br />user (`userName`, by default `stroomuser`) |  |  |
+| `tls` _[DatabaseTls](#databasetls)_ | Tls sets how Stroom and the operator use TLS on their connections to the database server. Unset, they use TLS if<br />the server supports it, without checking the server's certificate. A DatabaseBackup doesn't use these settings:<br />mysqldump uses TLS if the server supports it. |  | Optional |
 
 
 ### StartupProbeTimings

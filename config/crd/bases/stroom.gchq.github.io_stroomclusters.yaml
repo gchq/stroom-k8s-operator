@@ -81,6 +81,41 @@ spec:
                           SecretName is the name of the Secret containing the database user's password, under a key named after the
                           user (`userName`, by default `stroomuser`)
                         type: string
+                      tls:
+                        description: |-
+                          Tls sets how Stroom and the operator use TLS on their connections to the database server. Unset, they use TLS if
+                          the server supports it, without checking the server's certificate. A DatabaseBackup doesn't use these settings:
+                          mysqldump uses TLS if the server supports it.
+                        properties:
+                          caCertificates:
+                            description: |-
+                              CaCertificates selects a ConfigMap key holding the PEM certificates of the CAs to trust for the server's
+                              certificate, such as the Amazon RDS global bundle or a trust-manager Bundle. Unset, the CAs trusted by the Java
+                              runtime (for Stroom) and the operator's image are used.
+                            properties:
+                              configMapName:
+                                description: ConfigMapName is the name of the ConfigMap
+                                minLength: 1
+                                type: string
+                              key:
+                                description: Key is the ConfigMap key
+                                minLength: 1
+                                type: string
+                            required:
+                            - configMapName
+                            - key
+                            type: object
+                          mode:
+                            default: VerifyIdentity
+                            description: Mode is how connections use TLS
+                            enum:
+                            - Disabled
+                            - Preferred
+                            - Required
+                            - VerifyCA
+                            - VerifyIdentity
+                            type: string
+                        type: object
                     type: object
                   serverRef:
                     description: If specified, point to an operator-managed DatabaseServer

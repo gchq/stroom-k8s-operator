@@ -116,7 +116,7 @@ func renderFixture(objects []client.Object) map[string]client.Object {
 			add(dbBackupReconciler.createCronJob(resource, goldenDatabaseConnectionInfo(resource.Name)))
 
 		case *stroomv1.StroomCluster:
-			dbInfo := goldenDatabaseConnectionInfo(resource.Spec.DatabaseServerRef.ServerRef.Name)
+			dbInfo := goldenStroomClusterDatabaseConnectionInfo(resource)
 			add(stroomClusterReconciler.createServiceAccount(resource))
 			add(stroomClusterReconciler.createConfigMap(resource, readStaticFiles()))
 			if !resource.Spec.LogSender.IsZero() {
@@ -149,6 +149,16 @@ func goldenDatabaseConnectionInfo(dbServerName string) *DatabaseConnectionInfo {
 		},
 		UserName: DatabaseServiceUserName,
 	}
+}
+
+// goldenStroomClusterDatabaseConnectionInfo returns a StroomCluster's database connection details: its external
+// database server's, or fixed details for an operator-managed one
+func goldenStroomClusterDatabaseConnectionInfo(stroomCluster *stroomv1.StroomCluster) *DatabaseConnectionInfo {
+	dbRef := stroomCluster.Spec.DatabaseServerRef
+	if dbRef.ServerRef == (stroomv1.ResourceRef{}) {
+		return &DatabaseConnectionInfo{ServerAddress: dbRef.ServerAddress, UserName: dbRef.UserName}
+	}
+	return goldenDatabaseConnectionInfo(dbRef.ServerRef.Name)
 }
 
 // readStaticFiles returns the static content files, as the StroomCluster controller provides them in a ConfigMap
