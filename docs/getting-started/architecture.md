@@ -85,7 +85,7 @@ flowchart LR
   data <--> ui
   data --> db[(MySQL)]
   ui --> db
-  data -. "client credentials token" .-> idp[External identity provider]
+  data -. "processing user token" .-> idp[External identity provider]
   ui -. "user sign-in, tokens" .-> idp
   operator[Stroom K8s Operator] -. "creates and updates" .-> data
   operator -. "creates and updates" .-> ui

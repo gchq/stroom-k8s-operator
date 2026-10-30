@@ -34,15 +34,15 @@ Stroom 7 requires MySQL 8. Either:
 
 ## Identity provider
 
-Stroom must use an **external** OpenID Connect identity provider (IdP) such as Keycloak, Microsoft Entra ID or
-Amazon Cognito. You need:
+Stroom can use its internal identity provider (IdP), which needs nothing more, or an external OpenID Connect IdP
+such as Keycloak, Microsoft Entra ID or Amazon Cognito. For an external IdP you need:
 
 - A confidential client for Stroom with a client ID and secret.
-- The client credentials grant enabled for that client. The operator's scripts use it to get tokens.
+- The client credentials grant enabled for that client, which Stroom uses for its processing user.
 - The Stroom redirect URI registered with the IdP.
 - Network access from the Stroom Pods to the IdP.
 
-See [Identity provider](../configuration/identity-provider.md) for the details and the reason this is required.
+See [Identity provider](../configuration/identity-provider.md) for the details.
 
 ## TLS
 

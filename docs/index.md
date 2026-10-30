@@ -33,11 +33,10 @@ itself, see the [README](https://github.com/gradata-systems/stroom-k8s-operator#
 
 ## Before you start
 
-!!! warning "An external identity provider is required"
-    The operator authenticates to the Stroom API with an OpenID Connect client credentials token, which Stroom
-    only issues when it is configured to use an **external** identity provider (for example Keycloak, Microsoft
-    Entra ID or Amazon Cognito). Stroom's internal identity provider is not supported. See
-    [Identity provider](configuration/identity-provider.md).
+!!! note "Identity provider"
+    Stroom can use its internal identity provider or an external one, such as Keycloak, Microsoft Entra ID or
+    Amazon Cognito. Either way, the operator authenticates to the Stroom API with a Stroom API key it creates and
+    renews itself. See [Identity provider](configuration/identity-provider.md).
 
 | Component | Supported |
 | --- | --- |

@@ -105,8 +105,8 @@ function call_api() {
   sub_path=$1
   shift 1
 
-  # Use the operator-managed API key if one is mounted (INTERNAL_IDP). It is read on every call, so a rotated key is
-  # picked up without a restart. Otherwise, fetch an OAuth2 token from the external IdP (EXTERNAL_IDP).
+  # Use the operator-managed API key, with either IdP type. It is read on every call, so a rotated key is picked up
+  # without a restart. If there's none, fetch an OAuth2 token from the external IdP (EXTERNAL_IDP).
   if [ -s "$api_key_file" ]; then
     auth_header="Authorization: Bearer $(cat "$api_key_file")"
   else

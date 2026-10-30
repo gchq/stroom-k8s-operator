@@ -30,7 +30,7 @@ Create a confidential OpenID Connect client for Stroom. For Keycloak, follow the
 and in addition:
 
 - Turn on **Client authentication** and **Service accounts roles**, so the client can use the client credentials
-  grant. The operator's lifecycle scripts depend on it.
+  grant. Stroom's processing user depends on it.
 - Set the valid redirect URI to `https://stroom.example.com/api/auth/flow/v1/signin-oidc`.
 - Add an audience mapper so that access tokens carry the client ID in their `aud` claim.
 

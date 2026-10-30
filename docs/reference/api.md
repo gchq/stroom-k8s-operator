@@ -597,8 +597,8 @@ _Appears in:_ [StroomCluster](#stroomcluster)
 | `appDatabaseName` _string_ | Name of the main Stroom database, usually `stroom` | `stroom` | Pattern: `^[A-Za-z0-9_]{1,64}$` |
 | `statsDatabaseName` _string_ | Name of the statistics database, usually `stats` | `stats` | Pattern: `^[A-Za-z0-9_]{1,64}$` |
 | `configMapRef` _[ConfigMapRef](#configmapref)_ | Override the Stroom configuration provided to each node, by providing the name of an existing `ConfigMap`<br />in the same namespace as the `StroomCluster` |  |  |
-| `openId` _[OpenIdConfiguration](#openidconfiguration)_ | Configures OpenID to enable operator components to query the Stroom API - Only needed with EXTERNAL_IDP |  | Optional |
-| `identityProviderType` _[IdentityProviderType](#identityprovidertype)_ | INTERNAL_IDP means the operator creates and manages an API key; EXTERNAL_IDP requires openId | `INTERNAL_IDP` | Enum: [INTERNAL_IDP EXTERNAL_IDP] |
+| `openId` _[OpenIdConfiguration](#openidconfiguration)_ | OpenId is Stroom's OpenID client ID and secret, needed with EXTERNAL_IDP. The node scripts use them to get a token<br />only if the operator's API key is missing. |  | Optional |
+| `identityProviderType` _[IdentityProviderType](#identityprovidertype)_ | IdentityProviderType is Stroom's identity provider: its internal one, or an external one, which requires openId.<br />With either, the operator creates and renews a Stroom API key for the node scripts. | `INTERNAL_IDP` | Enum: [INTERNAL_IDP EXTERNAL_IDP] |
 | `https` _[HttpsSettings](#httpssettings)_ | HTTPS settings. Omit to use plain-text (HTTP) |  | Optional |
 | `ingress` _[IngressSettings](#ingresssettings)_ |  |  | Required |
 | `nodeNamePrefix` _string_ | NodeNamePrefix replaces the default `stroom-<cluster name>-node` prefix of the NodeSets' StatefulSet, Service and<br />Pod names, and so of the Stroom node names: with prefix `stroom-prod`, the first node of NodeSet `proc` is<br />`stroom-prod-proc-0`. It can't be changed once the StroomCluster exists, as Stroom keys a node's index volumes,<br />jobs and other state by its name. |  | MaxLength: 40<br />Optional<br />Pattern: `^[a-z]([-a-z0-9]*[a-z0-9])?$` |

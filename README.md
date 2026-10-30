@@ -121,12 +121,13 @@ Version 2.0.0 contains breaking changes. Before upgrading:
    The operator now provisions the key itself, and a volume mounted at `/stroom/api-key` will prevent Stroom nodes from being updated.
 3. If you set `IDENTITY_PROVIDER_TYPE` via `extraEnv`, remove it and set `spec.identityProviderType` instead.
 4. If you use an external identity provider, set `spec.identityProviderType: EXTERNAL_IDP` and ensure `spec.openId` is set.
+   The operator's API key is used with either identity provider type.
 5. If you install from a private registry, Helm value `registry` is now the full image repository,
    e.g. `--set registry=my-registry.example.com/gchq/stroom-k8s-operator` (previously `my-registry.example.com`).
 
 Then upgrade the CRDs first, followed by the operator (see [Upgrading the Operator](#upgrading-the-operator)).
 
-After upgrading, each Stroom cluster using `INTERNAL_IDP` runs the API key `Job`, then performs a rolling restart of its nodes.
+After upgrading, each Stroom cluster runs the API key `Job`, then performs a rolling restart of its nodes.
 
 
 # Upgrading a Stroom cluster

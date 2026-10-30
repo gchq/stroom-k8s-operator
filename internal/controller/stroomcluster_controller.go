@@ -196,7 +196,7 @@ func (r *StroomClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	r.warnOnIdentityProviderConflict(&stroomCluster)
 
-	// For INTERNAL_IDP, make sure the operator has a valid API key before any Stroom nodes need it.
+	// Make sure the operator has a valid API key before any Stroom nodes need it.
 	// apiKeyResult schedules the next key check, and is returned once the rest of the cluster is reconciled.
 	apiKeyReady, apiKeyResult, err := r.ensureApiKey(ctx, &stroomCluster, &dbInfo)
 	if err != nil {

@@ -28,10 +28,12 @@ type StroomClusterSpec struct {
 	// Override the Stroom configuration provided to each node, by providing the name of an existing `ConfigMap`
 	// in the same namespace as the `StroomCluster`
 	ConfigMapRef ConfigMapRef `json:"configMapRef,omitempty"`
-	// Configures OpenID to enable operator components to query the Stroom API - Only needed with EXTERNAL_IDP
+	// OpenId is Stroom's OpenID client ID and secret, needed with EXTERNAL_IDP. The node scripts use them to get a token
+	// only if the operator's API key is missing.
 	// +kubebuilder:validation:Optional
 	OpenId *OpenIdConfiguration `json:"openId,omitempty"`
-	// INTERNAL_IDP means the operator creates and manages an API key; EXTERNAL_IDP requires openId
+	// IdentityProviderType is Stroom's identity provider: its internal one, or an external one, which requires openId.
+	// With either, the operator creates and renews a Stroom API key for the node scripts.
 	// +kubebuilder:validation:Enum=INTERNAL_IDP;EXTERNAL_IDP
 	// +kubebuilder:default:=INTERNAL_IDP
 	IdentityProviderType IdentityProviderType `json:"identityProviderType,omitempty"`

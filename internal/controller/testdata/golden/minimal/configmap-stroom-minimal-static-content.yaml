@@ -5,7 +5,7 @@ data:
   node-start.sh: <sha256:7ccd9092da7ace7bf0bf575ec3f5301e0e9a1423688bc52212cd8c9e0081f568>
   stroomcluster-config-https.yaml: <sha256:658d99e6082609ae4799e3bbd8387e321e982481ea1e4e7523bb4838c2a2a143>
   stroomcluster-config.yaml: <sha256:74fbcc7c132e48fca034912ff8d813c07f6679367eef5fc6456c7b07c4567ed3>
-  utils.sh: <sha256:84bee2efac0a90c937050532f8bc3e1453189be1a271dc18587570983d756b99>
+  utils.sh: <sha256:569360bcbc3f82949339e478b6187bf5079eb7d0922826ef78d34df118dac93b>
 metadata:
   labels:
     app.kubernetes.io/component: stroom-cluster

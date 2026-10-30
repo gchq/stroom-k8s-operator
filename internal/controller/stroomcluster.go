@@ -258,22 +258,20 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 		},
 	}
 
-	// For INTERNAL_IDP, mount the operator-managed API key. Mounted as a directory (not subPath), so a rotated key
-	// becomes visible to running pods without a restart.
-	if stroomCluster.Spec.GetIdentityProviderType() == stroomv1.InternalIdp {
-		volumes = append(volumes, corev1.Volume{
-			Name: StroomApiKeyVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{
-					SecretName: stroomCluster.GetApiKeySecretName(),
-					Items: []corev1.KeyToPath{{
-						Key:  ApiKeySecretDataKey,
-						Path: ApiKeySecretDataKey,
-					}},
-				},
+	// Mount the operator-managed API key, which the node scripts use with either identity provider type. Mounted as a
+	// directory (not subPath), so a rotated key becomes visible to running pods without a restart.
+	volumes = append(volumes, corev1.Volume{
+		Name: StroomApiKeyVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: stroomCluster.GetApiKeySecretName(),
+				Items: []corev1.KeyToPath{{
+					Key:  ApiKeySecretDataKey,
+					Path: ApiKeySecretDataKey,
+				}},
 			},
-		})
-	}
+		},
+	})
 
 	if !stroomCluster.Spec.Https.IsZero() {
 		volumes = append(volumes, []corev1.Volume{
@@ -347,13 +345,11 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 	volumes = append(volumes, directoryVolumes...)
 	volumeMounts = append(volumeMounts, directoryMounts...)
 
-	if stroomCluster.Spec.GetIdentityProviderType() == stroomv1.InternalIdp {
-		volumeMounts = append(volumeMounts, corev1.VolumeMount{
-			Name:      StroomApiKeyVolumeName,
-			MountPath: StroomApiKeyMountPath,
-			ReadOnly:  true,
-		})
-	}
+	volumeMounts = append(volumeMounts, corev1.VolumeMount{
+		Name:      StroomApiKeyVolumeName,
+		MountPath: StroomApiKeyMountPath,
+		ReadOnly:  true,
+	})
 
 	if !stroomCluster.Spec.Https.IsZero() {
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{

@@ -86,10 +86,15 @@ The startup probe ran out of time. Look at `kubectl describe pod` for `Startup p
 
 ### Authentication failures in api.log
 
-`Token request ... failed` or responses of `401` or `403` mean the scripts can't authenticate:
+Responses of `401` or `403` mean the scripts can't authenticate. They use the operator's API key:
 
-- Is Stroom configured with `identityProviderType: EXTERNAL_IDP`? The internal IdP isn't supported. See
-  [Identity provider](../configuration/identity-provider.md).
+- Does the Secret `stroom-<cluster>-api-key` hold an `apiKey`? If not, check the API key Job's logs
+  (`kubectl logs job/stroom-<cluster>-cli-api-key`) and the `StroomCluster`'s events. With `EXTERNAL_IDP`, the Job needs
+  the IdP; see [Identity provider](../configuration/identity-provider.md#how-the-operators-scripts-authenticate).
+- Is the key's user, `stroom-k8s-operator`, enabled in Stroom, and is the key enabled and unexpired?
+
+`Token request ... failed` means there's no API key, so the scripts fell back to a client credentials token:
+
 - Is the IdP reachable from the Pod?
 - Are the client ID and secret in `spec.openId` correct, and does the client allow the client credentials grant?
 - Does the token's audience match what Stroom expects?

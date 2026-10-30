@@ -36,7 +36,8 @@ const (
 )
 
 // createApiKeyJob creates a Job that uses the Stroom CLI to create an API key for the operator, then writes it
-// to the cluster's API key Secret. Only used when the cluster uses Stroom's internal identity provider.
+// to the cluster's API key Secret. The CLI works on Stroom's database, so this works with either identity provider type:
+// with an external one, the user exists only in Stroom, and can't sign in interactively.
 func (r *StroomClusterReconciler) createApiKeyJob(stroomCluster *stroomv1.StroomCluster, dbInfo *DatabaseConnectionInfo) *batchv1.Job {
 	// Run with the same security and scheduling settings as the first NodeSet. The CRD requires at least one.
 	nodeSet := &stroomCluster.Spec.NodeSets[0]
@@ -221,15 +222,11 @@ func (r *StroomClusterReconciler) createApiKeyWriterRoleBinding(stroomCluster *s
 }
 
 // ensureApiKey makes sure the cluster's API key Secret holds a key that isn't due to expire, running the API key Job to
-// create one when needed. Only applies when the cluster uses Stroom's internal identity provider.
+// create one when needed. Stroom accepts API keys with either identity provider type.
 // Returns whether a usable key exists. If not, the caller should return the Result straight away. If so, the Result
 // schedules the next check (e.g. key renewal), and the caller should return it once the rest of the cluster is reconciled.
 func (r *StroomClusterReconciler) ensureApiKey(ctx context.Context, stroomCluster *stroomv1.StroomCluster, dbInfo *DatabaseConnectionInfo) (bool, ctrl.Result, error) {
 	logger := log.FromContext(ctx)
-
-	if stroomCluster.Spec.GetIdentityProviderType() != stroomv1.InternalIdp {
-		return true, ctrl.Result{}, nil
-	}
 
 	// The Secret is created empty and filled in by the Job. It is create-only, so the operator never overwrites the key.
 	secret := corev1.Secret{}

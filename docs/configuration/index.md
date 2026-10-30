@@ -21,7 +21,8 @@ cluster step by step.
 | `imagePullPolicy` | No | Pull policy for the Stroom image (and the keystore init container). | |
 | `databaseServerRef` | Yes | An operator-managed `DatabaseServer`, or the address of an external database. | [Database](../database/database-server.md) |
 | `appDatabaseName`, `statsDatabaseName` | Defaulted | Database names. Default `stroom` and `stats`. | [External database](../database/external-database.md) |
-| `openId` | Yes | OpenID client credentials used by the operator's node lifecycle scripts. | [Identity provider](identity-provider.md) |
+| `identityProviderType` | Defaulted | `INTERNAL_IDP` (default) or `EXTERNAL_IDP`. | [Identity provider](identity-provider.md) |
+| `openId` | With `EXTERNAL_IDP` | Stroom's OpenID client ID and secret. | [Identity provider](identity-provider.md) |
 | `ingress` | Yes | Public host name, Ingress class and TLS Secret. | [Ingress and TLS](ingress-tls.md) |
 | `https` | No | Serve HTTPS from the Stroom nodes themselves. | [Ingress and TLS](ingress-tls.md#https-inside-the-cluster) |
 | `configMapRef` | No | Replace the bundled Stroom `config.yml`. | [Stroom configuration](stroom-config.md) |

@@ -13,6 +13,11 @@
 - NodeSets can set `topologySpreadConstraints` (a constraint without a label selector selects the NodeSet's own Pods)
   and `podDisruptionBudget` (`maxUnavailable`, default 1), which creates a PodDisruptionBudget for the NodeSet. The
   operator's ClusterRole gains PodDisruptionBudget permissions.
+- The operator's Stroom API key, which the node scripts use, is now created and renewed with `EXTERNAL_IDP` too,
+  not only `INTERNAL_IDP`: Stroom accepts API keys with either identity provider type. Nodes no longer need a token
+  from the IdP to start, enable their jobs or drain, so an IdP outage doesn't stop nodes starting or draining. The
+  API key Job does need the IdP, as Stroom's CLI runs as the processing user. Existing `EXTERNAL_IDP` clusters run
+  the Job and then roll once, to mount the key.
 - An external database connection can verify the server's certificate: `serverAddress.tls` sets the TLS mode
   (`Disabled`, `Preferred`, `Required`, `VerifyCA` or `VerifyIdentity`, MySQL's `sslMode`) and, optionally, a
   ConfigMap key holding the CA certificates, such as the Amazon RDS bundle. Stroom's JDBC URLs and the operator's
