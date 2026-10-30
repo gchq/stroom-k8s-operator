@@ -1,4 +1,4 @@
-# The values terraform/aws-eks-proxy/modules/stroom-proxy renders for its
+# The values terraform/aws-eks/modules/stroom-proxy renders for its
 # default deployment (cert + OIDC + DFK, S3 forwarding, no downstream), taken
 # from its helm_values output. Validated here so the Terraform's rendering is
 # checked against the proxy image too. Refresh it when the module's rendering

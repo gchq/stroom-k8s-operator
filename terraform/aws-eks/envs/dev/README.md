@@ -41,7 +41,7 @@ retention, throwaway test certificates.
 
 ## Apply
 
-Run from `terraform/aws-eks-proxy`, one stack at a time, checking each plan:
+Run from `terraform/aws-eks`, one stack at a time, checking each plan:
 
 ```sh
 cd stacks/10-infra

@@ -13,7 +13,7 @@ the runbooks come in the next phase.
 ## Layout
 
 ```
-terraform/aws-eks-proxy/
+terraform/aws-eks/
 ├── modules/
 │   ├── network/          # VPC, subnets, NAT gateways, optional VPC endpoints (or an existing VPC)
 │   ├── eks/              # EKS cluster, system and proxy node groups, add-ons

@@ -101,7 +101,7 @@ From the 7.14 source (`7.14` branch, CHANGELOG at `v7.14-beta.8`/`beta.9`), stro
 ### 4.2 Layout
 
 ```
-terraform/aws-eks/                 # renamed from terraform/aws-eks-proxy (decision 16.1)
+terraform/aws-eks/                 # renamed from terraform/aws-eks-proxy (decision 16.1, done)
 ├── modules/
 │   ├── network/ eks/ platform/ stroom-proxy/   # existing; eks and platform gain Stroom options
 │   ├── stroom-db/                 # RDS MySQL, parameter group, subnet group, secret
@@ -487,7 +487,7 @@ stroom_downstream = {
 
 ## 17. Implementation phases
 
-0. **Groundwork**: merge upstream `gradata-systems/stroom-k8s-operator` `master` into the fork (S19), keeping fork #34; rename `terraform/aws-eks-proxy` to `terraform/aws-eks`; raise the Stroom issue for duplicate streams (S6).
+0. **Groundwork**: merge upstream `gradata-systems/stroom-k8s-operator` `master` into the fork (S19), keeping fork #34 (done: branch `sync-upstream-1.2`, in review, merged into `stroom-eks`); rename `terraform/aws-eks-proxy` to `terraform/aws-eks` (done); raise the Stroom issue for duplicate streams (S6).
 1. **Ingest spike** (early, since S1–S8 are beta code): a single Stroom pod in the dev cluster with a throwaway MySQL, the read-only volume and the queue, Pod Identity. Done when a proxy zip becomes a stream, a pipeline reads it, the DLQ path works, and the eTag and `EffectiveTime` questions (16.2.9, 16.2.10) are answered.
 2. **Operator changes** (10.2), with the upstream golden-file and `envtest` tests extended to cover them.
 3. **`10-infra` and `20-platform` additions**, all gated on `stroom_node_sets` (4.4): Stroom node groups with NVMe RAID0, EFS CSI driver and StorageClass, cert-manager and trust-manager with the in-cluster CA, metrics-server, the operator and CRDs; and `proxy_node_colours` allowed to be empty. `terraform test` cases for proxy-only, Stroom-only and both.

@@ -114,7 +114,7 @@ There are **three root stacks with separate state**:
 * A cluster rebuild shouldn't force workload churn, and the other way round.
 
 ```
-stroom-k8s-operator/terraform/aws-eks-proxy/   # in gchq/stroom-k8s-operator, next to charts/stroom-proxy
+stroom-k8s-operator/terraform/aws-eks/         # in gchq/stroom-k8s-operator, next to charts/stroom-proxy
 ├── README.md
 ├── scripts/
 │   ├── latest-proxy-tag.sh            # finds newest v7.14 tag + digest on Docker Hub (F1)
@@ -549,7 +549,7 @@ Agreed 2026-10-29; the rows from **PrivateLink** down were added or revised the 
 | Topic | Decision |
 |---|---|
 | Helm chart | A new `charts/stroom-proxy` in `gchq/stroom-k8s-operator`, written from scratch (the gradata chart has no licence, F3), MIT (section 10). Terraform references it by chart repo and version. |
-| Code location | `gchq/stroom-k8s-operator`: Terraform in `terraform/aws-eks-proxy/`, this design in `design/`. |
+| Code location | `gchq/stroom-k8s-operator`: Terraform in `terraform/aws-eks/`, this design in `design/`. |
 | Image | Pin `v7.14-beta.8` plus digest. Move to `v7.14.0` when it ships. Never use `v7.14-LATEST`. |
 | VPC | A new 3-AZ VPC by default, with public, lb and private subnets. `existing_vpc_id` + subnet ids switch to an existing one. |
 | Secrets | Secrets Manager → External Secrets Operator by default. `secret_delivery = "terraform"` fallback for dev (values in state). |

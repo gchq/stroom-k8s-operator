@@ -2,7 +2,7 @@
 
 Runs [Stroom-Proxy](https://github.com/gchq/stroom) 7.14 as a StatefulSet, for
 use behind an AWS load balancer (ALB) with blue/green upgrades. It is written
-for the Terraform in [`terraform/aws-eks-proxy`](../../terraform/aws-eks-proxy),
+for the Terraform in [`terraform/aws-eks`](../../terraform/aws-eks),
 which renders its values; the design is in
 [`design/proxy-eks-terraform-design.md`](../../design/proxy-eks-terraform-design.md).
 
