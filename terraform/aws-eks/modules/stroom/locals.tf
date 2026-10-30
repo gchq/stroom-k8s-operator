@@ -84,5 +84,19 @@ locals {
 
   # The operator's StroomCluster names its pods' Pod Identity service account
   # after the cluster; the bootstrap Job has its own
-  bootstrap_service_account = "stroom-bootstrap"
+  bootstrap_service_account         = "stroom-bootstrap"
+  proxy_key_renewal_service_account = "stroom-proxy-key-renewal"
+
+  # Labels of the bootstrap Job's pods: the NetworkPolicy lets only these, of
+  # the pods that aren't Stroom's, reach Stroom's API
+  bootstrap_pod_labels = { "app.kubernetes.io/name" = "stroom-bootstrap" }
+
+  # Pod annotations that restart the Stroom nodes (one at a time) when a secret
+  # they read only at start has changed: the database user's password
+  # (generation from modules/stroom-db) and the TLS certificate (cert-manager's
+  # revision, read from the Certificate at plan time)
+  restart_annotations = {
+    "stroom.gchq.github.io/db-password-version" = tostring(var.db.app_user_password_version)
+    "stroom.gchq.github.io/tls-revision"        = tostring(local.tls_revision)
+  }
 }

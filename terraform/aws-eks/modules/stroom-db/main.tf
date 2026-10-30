@@ -148,7 +148,8 @@ resource "aws_secretsmanager_secret" "app_user" {
 resource "aws_secretsmanager_secret_version" "app_user" {
   secret_id        = aws_secretsmanager_secret.app_user.id
   secret_string_wo = ephemeral.random_password.app_user.result
-  # Bump to set a new password: the init Job then changes the user's password
-  # to match, and the Stroom nodes need a rolling restart
-  secret_string_wo_version = 1
+  # Raised to set a new password: 40-stroom passes it on, so the database init
+  # Job runs again and changes the user's password to match (keeping the old
+  # one as a secondary password), and the Stroom nodes restart with the new one
+  secret_string_wo_version = var.database.app_user_password_version
 }

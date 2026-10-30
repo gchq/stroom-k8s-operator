@@ -52,6 +52,12 @@ variable "database" {
     backup_window           : e.g. "01:00-02:00" (UTC).
     performance_insights    : turn on Performance Insights.
     apply_immediately       : apply changes now rather than in the maintenance window.
+    app_user_password_version : the Stroom user's password generation. Raise it
+                              (e.g. 1 to 2) to set a new random password: the
+                              database init Job in 40-stroom then changes the
+                              user's password, keeping the old one valid as a
+                              secondary password, and the Stroom nodes restart
+                              one at a time with the new one.
   EOT
   type = object({
     engine_version        = optional(string, "8.4")
@@ -66,8 +72,15 @@ variable "database" {
     backup_window         = optional(string, "01:00-02:00")
     performance_insights  = optional(bool, true)
     apply_immediately     = optional(bool, false)
+
+    app_user_password_version = optional(number, 1)
   })
   default = {}
+
+  validation {
+    condition     = var.database.app_user_password_version >= 1 && floor(var.database.app_user_password_version) == var.database.app_user_password_version
+    error_message = "database.app_user_password_version must be a whole number, at least 1. Only ever raise it."
+  }
 
   validation {
     condition     = can(regex("^8\\.4(\\.[0-9]+)?$", var.database.engine_version))

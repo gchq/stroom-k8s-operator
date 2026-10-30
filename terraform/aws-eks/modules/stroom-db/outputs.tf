@@ -33,6 +33,11 @@ output "app_user_secret_arn" {
   value       = aws_secretsmanager_secret.app_user.arn
 }
 
+output "app_user_password_version" {
+  description = "Generation of the Stroom database user's password: 40-stroom re-runs the init Job and restarts the Stroom nodes when it changes."
+  value       = aws_secretsmanager_secret_version.app_user.secret_string_wo_version
+}
+
 output "kms_key_arn" {
   description = "KMS key of the database storage and its secrets."
   value       = aws_kms_key.db.arn

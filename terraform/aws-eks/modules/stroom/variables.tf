@@ -64,7 +64,7 @@ variable "secrets_name_prefix" {
 }
 
 variable "external_secrets_role_arn" {
-  description = "IAM role of the External Secrets Operator (20-platform). Given read access to the RDS-managed master secret, which is outside secrets_name_prefix."
+  description = "IAM role of the External Secrets Operator's controller (20-platform). It reads nothing itself: it may assume this module's External Secrets role, which reads only Stroom's secrets."
   type        = string
 }
 
@@ -87,15 +87,22 @@ variable "tags" {
 # --- the database (modules/stroom-db) ---
 
 variable "db" {
-  description = "The database from modules/stroom-db, and the CA bundle that signs its certificate (PEM)."
+  description = <<-EOT
+    The database from modules/stroom-db, and the CA bundle that signs its
+    certificate (PEM). app_user_password_version is the generation of the
+    Stroom user's password: when it changes, the database init Job runs again
+    and the Stroom nodes restart with the new password.
+  EOT
   type = object({
-    host                   = string
-    port                   = number
-    master_user_secret_arn = string
-    app_user               = string
-    app_user_secret_name   = string
-    kms_key_arn            = string
-    ca_bundle_pem          = string
+    host                      = string
+    port                      = number
+    master_user_secret_arn    = string
+    app_user                  = string
+    app_user_secret_name      = string
+    app_user_secret_arn       = string
+    app_user_password_version = optional(number, 1)
+    kms_key_arn               = string
+    ca_bundle_pem             = string
   })
 }
 
@@ -176,6 +183,20 @@ variable "node_sets" {
     error_message = "node_sets needs at least one node set."
   }
 
+  # As the operator's CRD: node set names are DNS labels of at most 30
+  # characters
+  validation {
+    condition     = alltrue([for k in keys(var.node_sets) : length(k) <= 30 && can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", k))])
+    error_message = "Node set names must be at most 30 lower-case letters, digits and hyphens, starting and ending with a letter or digit."
+  }
+
+  # As the operator's CRD: each StatefulSet name, <node_name_prefix>-<node set>,
+  # is at most 52 characters
+  validation {
+    condition     = alltrue([for k in keys(var.node_sets) : length(var.node_name_prefix) + length(k) <= 51])
+    error_message = "node_name_prefix, a hyphen and each node set name must make at most 52 characters (the StatefulSet name): shorten the prefix or the node set name."
+  }
+
   validation {
     condition     = alltrue([for k, s in var.node_sets : contains(["Processing", "Frontend"], s.role)])
     error_message = "Each node set's role must be Processing or Frontend."
@@ -231,15 +252,18 @@ variable "idp" {
     client_id          : the app registration's client ID.
     client_secret_name : Secrets Manager name of the client secret, relative to
                          secrets_name_prefix.
+    client_secret_kms_key_arn : the customer managed KMS key encrypting it, if
+                         any; null for Secrets Manager's AWS managed key.
     first_admin        : the first administrator's IdP identity (Entra object
                          ID, or the uniqueIdentityClaim value), and display name.
   EOT
   type = object({
-    type               = optional(string, "entra")
-    tenant_id          = optional(string)
-    discovery_url      = optional(string)
-    client_id          = string
-    client_secret_name = string
+    type                      = optional(string, "entra")
+    tenant_id                 = optional(string)
+    discovery_url             = optional(string)
+    client_id                 = string
+    client_secret_name        = string
+    client_secret_kms_key_arn = optional(string)
     first_admin = object({
       subject      = string
       display_name = string
@@ -362,4 +386,32 @@ variable "proxy_api_key_secret_name" {
   description = "Secrets Manager name, relative to secrets_name_prefix, the bootstrap Job writes the proxy's Stroom API key to (design 8.1). null = no proxy user or key."
   type        = string
   default     = null
+}
+
+variable "proxy_api_key_renewal" {
+  description = <<-EOT
+    The proxy's Stroom API key (design 8.1): the bootstrap Job creates it, and
+    a CronJob creates a new one when the current one is within
+    renew_before_days of expiry. The old key stays valid until it expires, so
+    the proxy has renew_before_days to restart with the new one.
+
+    lifetime_days     : lifetime of each key; at most Stroom's
+                        maxApiKeyExpiryAge (365 days).
+    renew_before_days : renew this long before the current key expires.
+    schedule          : when the CronJob checks (cron, UTC).
+  EOT
+  type = object({
+    lifetime_days     = optional(number, 365)
+    renew_before_days = optional(number, 35)
+    schedule          = optional(string, "17 3 * * *")
+  })
+  default = {}
+
+  validation {
+    condition = (
+      var.proxy_api_key_renewal.lifetime_days >= 30 && var.proxy_api_key_renewal.lifetime_days <= 365 &&
+      var.proxy_api_key_renewal.renew_before_days >= 7 && var.proxy_api_key_renewal.renew_before_days < var.proxy_api_key_renewal.lifetime_days / 2
+    )
+    error_message = "proxy_api_key_renewal: lifetime_days must be 30-365 (Stroom's maxApiKeyExpiryAge), and renew_before_days at least 7 and less than half of lifetime_days."
+  }
 }

@@ -38,6 +38,21 @@ output "proxy_api_key_secret_name" {
   value       = var.proxy_api_key_secret_name
 }
 
+output "bootstrap_job" {
+  description = "Name of the bootstrap Job: a new name means it runs again. null while the cluster is stopped, when there is none."
+  value       = one(kubernetes_job_v1.bootstrap[*].metadata[0].name)
+}
+
+output "db_init_job" {
+  description = "Name of the database init Job: a new name means it runs again."
+  value       = kubernetes_job_v1.db_init.metadata[0].name
+}
+
+output "external_secrets_role_arn" {
+  description = "IAM role the SecretStore in Stroom's namespace assumes to read Stroom's secrets."
+  value       = aws_iam_role.external_secrets.arn
+}
+
 output "stream_volume" {
   description = "EFS file system and access point of the shared stream volume."
   value = {

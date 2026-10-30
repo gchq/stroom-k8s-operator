@@ -16,6 +16,16 @@ mock_provider "aws" {
   }
 }
 mock_provider "kubernetes" {}
+
+# The proxy key's secret as it is once created: its ARN is one of the bootstrap
+# Job's settings, so its name is known in plans after the first
+override_resource {
+  target          = aws_secretsmanager_secret.proxy_api_key
+  override_during = plan
+  values = {
+    arn = "arn:aws:secretsmanager:eu-west-2:123456789012:secret:stroom/test/stroom-proxy-api-key-AbCdEf"
+  }
+}
 mock_provider "time" {}
 
 variables {
@@ -47,6 +57,7 @@ variables {
     master_user_secret_arn = "arn:aws:secretsmanager:eu-west-2:123456789012:secret:rds!db-abc"
     app_user               = "stroomuser"
     app_user_secret_name   = "stroom/test/db-stroomuser"
+    app_user_secret_arn    = "arn:aws:secretsmanager:eu-west-2:123456789012:secret:stroom/test/db-stroomuser-AbCdEf"
     kms_key_arn            = "arn:aws:kms:eu-west-2:123456789012:key/db"
     ca_bundle_pem          = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
   }
@@ -199,8 +210,374 @@ run "renders_the_stroom_cluster" {
   }
 
   assert {
-    condition     = anytrue([for c in aws_lb_listener_rule.refuse.condition : anytrue([for p in c.path_pattern : contains(p.values, "*clustercall.rpc*")])])
-    error_message = "Expected cluster calls refused at the ALB."
+    condition = alltrue([for c in aws_lb_listener_rule.refuse.condition : alltrue([for p in c.path_pattern : (
+      contains(p.values, "/datafeed*") && contains(p.values, "/stroom/noauth/datafeed*") &&
+      length(p.values) <= 5 && length(regexall("[*?]", join("", p.values))) <= 5
+    )])])
+    error_message = "Expected Stroom's datafeed paths refused at the ALB, within the ALB's limits of 5 values and 5 wildcards per rule."
+  }
+
+  assert {
+    condition = (
+      output.stroom_cluster_spec.nodeSets[0].affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm.labelSelector.matchExpressions[1] == { key = "stroom/nodeSet", operator = "Exists" } &&
+      !can(output.stroom_cluster_spec.nodeSets[0].affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution) &&
+      output.stroom_cluster_spec.nodeSets[0].topologySpreadConstraints[1].topologyKey == "kubernetes.io/hostname" &&
+      output.stroom_cluster_spec.nodeSets[0].topologySpreadConstraints[1].whenUnsatisfiable == "DoNotSchedule"
+    )
+    error_message = "Expected one pod per node from a hostname spread, and no required anti-affinity, which the operator's API key Job would copy and so never fit next to a Stroom pod."
+  }
+
+  assert {
+    condition = (
+      output.stroom_cluster_spec.nodeSets[0].podAnnotations["stroom.gchq.github.io/db-password-version"] == "1" &&
+      # Read from the Certificate once it exists, so unknown in this plan
+      contains(keys(output.stroom_cluster_spec.nodeSets[1].podAnnotations), "stroom.gchq.github.io/tls-revision") &&
+      output.stroom_cluster_spec.nodeSets[1].podAnnotations["instrumentation.opentelemetry.io/inject-java"] == "false"
+    )
+    error_message = "Expected the password generation and certificate revision on every node set's pods, so a change restarts them."
+  }
+
+  assert {
+    condition     = kubernetes_manifest.tls_certificate.manifest.spec.renewBefore == "2160h" && kubernetes_manifest.tls_certificate.manifest.spec.duration == "8760h"
+    error_message = "Expected the certificate renewed 90 days before it expires, leaving time for an apply to restart the nodes."
+  }
+}
+
+run "network_policy" {
+  command = plan
+
+  module {
+    source = "../../modules/stroom"
+  }
+
+  # The bootstrap Job reaches Stroom's API, on 8443 only
+  assert {
+    condition = length([
+      for i in kubernetes_network_policy_v1.stroom.spec[0].ingress : i
+      if anytrue([for f in i.from : anytrue([for s in f.pod_selector : s.match_labels == tomap({ "app.kubernetes.io/name" = "stroom-bootstrap" })])])
+      && [for p in i.ports : p.port] == ["8443"]
+      && length(i.from) == 1
+    ]) == 1
+    error_message = "Expected an ingress rule letting the bootstrap Job's pods (and only them) reach 8443."
+  }
+
+  assert {
+    condition     = kubernetes_job_v1.bootstrap[0].spec[0].template[0].metadata[0].labels == tomap({ "app.kubernetes.io/name" = "stroom-bootstrap" })
+    error_message = "Expected the bootstrap Job's pods to carry the label the NetworkPolicy admits."
+  }
+
+  # Nothing else new: the ALB's subnets and Stroom's pods on 8443 and 8081, the proxy on 8443
+  assert {
+    condition = (
+      length(kubernetes_network_policy_v1.stroom.spec[0].ingress) == 3 &&
+      [for p in kubernetes_network_policy_v1.stroom.spec[0].ingress[2].ports : p.port] == ["8443"] &&
+      kubernetes_network_policy_v1.stroom.spec[0].ingress[2].from[0].namespace_selector[0].match_labels == tomap({ "kubernetes.io/metadata.name" = "stroom-proxy" })
+    )
+    error_message = "Expected three ingress rules: ALB and Stroom pods, the bootstrap Job, and the proxy on 8443."
+  }
+}
+
+run "refuses_direct_data_receipt" {
+  command = plan
+
+  module {
+    source = "../../modules/stroom"
+  }
+
+  assert {
+    condition = (
+      yamldecode(output.stroom_config).appConfig.receive.enabledAuthenticationTypes == ["DATA_FEED_KEY"] &&
+      yamldecode(output.stroom_config).appConfig.receive.authenticationRequired == true &&
+      !contains(keys(yamldecode(output.stroom_config).appConfig.receive), "receiptCheckMode")
+    )
+    error_message = "Expected Stroom to refuse posts to /datafeed (only data feed keys, of which there are none), and to leave receiptCheckMode, which S3 ingest uses, alone."
+  }
+}
+
+run "external_secrets_role" {
+  command = plan
+
+  module {
+    source = "../../modules/stroom"
+  }
+
+  assert {
+    condition     = aws_iam_role.external_secrets.name_prefix == "stroom-test-steso-"
+    error_message = "Expected the role named <cluster_name>-*, the only roles the External Secrets controller may assume."
+  }
+
+  assert {
+    condition = (
+      data.aws_iam_policy_document.external_secrets_trust.statement[0].actions == toset(["sts:AssumeRole", "sts:TagSession"]) &&
+      one(data.aws_iam_policy_document.external_secrets_trust.statement[0].principals).identifiers == toset(["arn:aws:iam::123456789012:role/stroom-test-eso-abc"])
+    )
+    error_message = "Expected the role to trust the External Secrets controller's role only."
+  }
+
+  assert {
+    condition = (
+      data.aws_iam_policy_document.external_secrets.statement[0].actions == toset(["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]) &&
+      toset(data.aws_iam_policy_document.external_secrets.statement[0].resources) == toset([
+        "arn:aws:secretsmanager:eu-west-2:123456789012:secret:stroom/test/db-stroomuser-AbCdEf",
+        "arn:aws:secretsmanager:eu-west-2:123456789012:secret:rds!db-abc",
+        "arn:aws:secretsmanager:eu-west-2:123456789012:secret:stroom/test/stroom-oidc-client-secret-??????",
+      ])
+    )
+    error_message = "Expected Stroom's secrets only: the database user's, the RDS master secret and the OIDC client secret (not the proxy's key)."
+  }
+
+  assert {
+    condition = (
+      toset(data.aws_iam_policy_document.external_secrets.statement[1].resources) == toset(["arn:aws:kms:eu-west-2:123456789012:key/db"]) &&
+      toset(one(data.aws_iam_policy_document.external_secrets.statement[1].condition).values) == toset(["secretsmanager.eu-west-2.amazonaws.com"])
+    )
+    error_message = "Expected kms:Decrypt on the database key, through Secrets Manager only."
+  }
+}
+
+# The longest deployment name (29 characters, 10-infra): IAM role name prefixes
+# are limited to 38 characters, RDS identifier prefixes to 37. Mocked providers
+# don't check lengths, so the test does.
+run "longest_name_fits_aws_limits" {
+  command = plan
+
+  module {
+    source = "../../modules/stroom"
+  }
+
+  variables {
+    name         = "abcdefghij-klmnopqrst-uvwxyz1"
+    cluster_name = "abcdefghij-klmnopqrst-uvwxyz1"
+  }
+
+  assert {
+    condition = alltrue([for p in concat(
+      [aws_iam_role.stroom.name_prefix, aws_iam_role.bootstrap.name_prefix, aws_iam_role.external_secrets.name_prefix],
+      aws_iam_role.proxy_key_renewal[*].name_prefix,
+    ) : length(p) <= 38]) && length(var.name) == 29
+    error_message = "Expected every IAM role name prefix within 38 characters for a 29-character name."
+  }
+
+  assert {
+    condition     = length(aws_lb.stroom.name) <= 32 && length(aws_lb_target_group.ui.name) <= 32
+    error_message = "Expected the ALB and target group names within 32 characters."
+  }
+}
+
+run "longest_name_fits_aws_limits_db" {
+  command = plan
+
+  module {
+    source = "../../modules/stroom-db"
+  }
+
+  variables {
+    name                      = "abcdefghij-klmnopqrst-uvwxyz1"
+    subnet_ids                = ["subnet-a", "subnet-b", "subnet-c"]
+    client_security_group_ids = ["sg-nodes"]
+  }
+
+  assert {
+    condition     = length(aws_db_instance.db.identifier_prefix) <= 37 && length(aws_db_parameter_group.db.name_prefix) <= 100 && length(aws_db_subnet_group.db.name_prefix) <= 100
+    error_message = "Expected the RDS identifier prefix within 37 characters for a 29-character name."
+  }
+}
+
+run "rejects_node_set_name_not_a_dns_label" {
+  command = plan
+
+  module {
+    source = "../../modules/stroom"
+  }
+
+  variables {
+    node_sets = {
+      Proc = { count = 2, role = "Processing", cpu = 30, memory_gib = 240, heap_gib = 64, data_volume_gb = 1000 }
+      ui   = { count = 1, role = "Frontend", cpu = 14, memory_gib = 120, heap_gib = 64, data_volume_gb = 200 }
+    }
+  }
+
+  expect_failures = [var.node_sets]
+}
+
+run "rejects_statefulset_name_too_long" {
+  command = plan
+
+  module {
+    source = "../../modules/stroom"
+  }
+
+  variables {
+    # 40 + 1 + 12 = 53 characters
+    node_name_prefix = "stroom-test-abcdefghijklmnopqrstuvwxyz12"
+    node_sets = {
+      proc         = { count = 2, role = "Processing", cpu = 30, memory_gib = 240, heap_gib = 64, data_volume_gb = 1000 }
+      ui-frontends = { count = 1, role = "Frontend", cpu = 14, memory_gib = 120, heap_gib = 64, data_volume_gb = 200 }
+    }
+    stroom_node_sets = {
+      proc         = { node_label = { key = "stroom/node-set", value = "proc" }, node_count = 2 }
+      ui-frontends = { node_label = { key = "stroom/node-set", value = "ui-frontends" }, node_count = 1 }
+    }
+  }
+
+  expect_failures = [var.node_sets]
+}
+
+run "rejects_external_secrets_role_outside_cluster_name" {
+  command = plan
+
+  module {
+    source = "../../modules/stroom"
+  }
+
+  variables {
+    name = "other"
+  }
+
+  expect_failures = [terraform_data.check_role_names]
+}
+
+run "bootstrap_and_db_init_inputs" {
+  command = plan
+
+  module {
+    source = "../../modules/stroom"
+  }
+
+  assert {
+    condition     = output.bootstrap_job != null && startswith(output.bootstrap_job, "stroom-bootstrap-")
+    error_message = "Expected the bootstrap Job while the cluster runs."
+  }
+
+  assert {
+    condition = (
+      kubernetes_manifest.proxy_key_renewal[0].manifest.spec.suspend == false &&
+      kubernetes_manifest.proxy_key_renewal[0].manifest.spec.jobTemplate.spec.template.spec.serviceAccountName == "stroom-proxy-key-renewal" &&
+      contains([for e in kubernetes_manifest.proxy_key_renewal[0].manifest.spec.jobTemplate.spec.template.spec.containers[0].env : e.name], "RENEW_BEFORE_DAYS") &&
+      data.aws_iam_policy_document.proxy_key_renewal[0].statement[0].actions == toset(["secretsmanager:ListSecretVersionIds", "secretsmanager:PutSecretValue"])
+    )
+    error_message = "Expected the proxy key renewal CronJob, with its own service account, allowed only to list and write the key's versions."
+  }
+}
+
+# A change to config.yml alone doesn't run the bootstrap again
+run "bootstrap_ignores_config" {
+  command = plan
+
+  module {
+    source = "../../modules/stroom"
+  }
+
+  variables {
+    ingest = {
+      bucket            = "stroom-test-data"
+      queue_url         = "https://sqs.eu-west-2.amazonaws.com/123456789012/other-events"
+      queue_arn         = "arn:aws:sqs:eu-west-2:123456789012:other-events"
+      dlq_url           = "https://sqs.eu-west-2.amazonaws.com/123456789012/other-events-dlq"
+      dlq_arn           = "arn:aws:sqs:eu-west-2:123456789012:other-events-dlq"
+      kms_key_arn       = "arn:aws:kms:eu-west-2:123456789012:key/data"
+      expire_after_days = 91
+    }
+  }
+
+  assert {
+    condition     = output.bootstrap_job == run.bootstrap_and_db_init_inputs.bootstrap_job
+    error_message = "Expected the same bootstrap Job when only config.yml changes."
+  }
+}
+
+# A new node, or a new image, runs it again
+run "bootstrap_reruns_for_nodes_and_image" {
+  command = plan
+
+  module {
+    source = "../../modules/stroom"
+  }
+
+  variables {
+    stroom_image = { tag = "v7.14.1" }
+  }
+
+  assert {
+    condition     = output.bootstrap_job != run.bootstrap_and_db_init_inputs.bootstrap_job
+    error_message = "Expected a new bootstrap Job for a new image."
+  }
+}
+
+# Stopped for an upgrade: no bootstrap Job waiting for an API with no pods, and
+# no key renewal against a database the new version hasn't migrated yet
+run "stopped_has_no_bootstrap" {
+  command = plan
+
+  module {
+    source = "../../modules/stroom"
+  }
+
+  variables {
+    stopped = true
+  }
+
+  assert {
+    condition     = length(kubernetes_job_v1.bootstrap) == 0 && output.bootstrap_job == null
+    error_message = "Expected no bootstrap Job while the cluster is stopped."
+  }
+
+  assert {
+    condition     = kubernetes_manifest.proxy_key_renewal[0].manifest.spec.suspend == true
+    error_message = "Expected the key renewal CronJob suspended while the cluster is stopped."
+  }
+
+  assert {
+    condition     = output.stroom_cluster_spec.stopped == true
+    error_message = "Expected the StroomCluster stopped."
+  }
+}
+
+# A new database password: the init Job runs again, and the nodes restart
+run "db_password_rotation" {
+  command = plan
+
+  module {
+    source = "../../modules/stroom"
+  }
+
+  variables {
+    db = {
+      host                      = "stroom.abc.eu-west-2.rds.amazonaws.com"
+      port                      = 3306
+      master_user_secret_arn    = "arn:aws:secretsmanager:eu-west-2:123456789012:secret:rds!db-abc"
+      app_user                  = "stroomuser"
+      app_user_secret_name      = "stroom/test/db-stroomuser"
+      app_user_secret_arn       = "arn:aws:secretsmanager:eu-west-2:123456789012:secret:stroom/test/db-stroomuser-AbCdEf"
+      app_user_password_version = 2
+      kms_key_arn               = "arn:aws:kms:eu-west-2:123456789012:key/db"
+      ca_bundle_pem             = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+    }
+  }
+
+  assert {
+    condition     = output.db_init_job != run.bootstrap_and_db_init_inputs.db_init_job
+    error_message = "Expected a new database init Job for a new password."
+  }
+
+  assert {
+    condition     = strcontains(kubernetes_job_v1.db_init.spec[0].template[0].spec[0].container[0].command[2], "RETAIN CURRENT PASSWORD")
+    error_message = "Expected the old password kept as the secondary one, so running nodes can connect while they restart."
+  }
+
+  assert {
+    condition     = kubernetes_manifest.db_secret.manifest.spec.target.template.data["password-version"] == "2"
+    error_message = "Expected the generation in the Secret, for the init Job to wait for."
+  }
+
+  assert {
+    condition     = output.bootstrap_job == run.bootstrap_and_db_init_inputs.bootstrap_job
+    error_message = "Expected the bootstrap Job unchanged by a new password."
+  }
+
+  assert {
+    condition     = alltrue([for s in output.stroom_cluster_spec.nodeSets : s.podAnnotations["stroom.gchq.github.io/db-password-version"] == "2"])
+    error_message = "Expected the nodes restarted with the new password."
   }
 }
 
@@ -256,7 +633,7 @@ run "rejects_retention_longer_than_bucket_expiry" {
     raw_data_retention_days = 91
   }
 
-  expect_failures = [terraform_data.input_checks]
+  expect_failures = [terraform_data.check_retention]
 }
 
 run "rejects_more_pods_than_nodes" {
@@ -273,7 +650,7 @@ run "rejects_more_pods_than_nodes" {
     }
   }
 
-  expect_failures = [terraform_data.input_checks]
+  expect_failures = [terraform_data.check_node_counts]
 }
 
 run "rejects_node_set_without_node_groups" {
@@ -290,7 +667,7 @@ run "rejects_node_set_without_node_groups" {
     }
   }
 
-  expect_failures = [terraform_data.input_checks]
+  expect_failures = [terraform_data.check_node_groups]
 }
 
 run "rejects_no_frontend" {
@@ -337,7 +714,7 @@ run "rejects_private_ca_without_arn" {
     private_ca_arn = null
   }
 
-  expect_failures = [terraform_data.input_checks]
+  expect_failures = [terraform_data.check_tls_source]
 }
 
 run "rejects_keycloak_without_discovery_url" {

@@ -35,12 +35,18 @@ output "proxy_downstream" {
 }
 
 output "database" {
-  description = "The database: host, and the secrets of its master and Stroom users."
+  description = "The database: host, the secrets of its master and Stroom users, and the generation of the Stroom user's password."
   value = {
-    host                   = module.stroom_db.host
-    master_user_secret_arn = module.stroom_db.master_user_secret_arn
-    app_user_secret_name   = module.stroom_db.app_user_secret_name
+    host                      = module.stroom_db.host
+    master_user_secret_arn    = module.stroom_db.master_user_secret_arn
+    app_user_secret_name      = module.stroom_db.app_user_secret_name
+    app_user_password_version = module.stroom_db.app_user_password_version
   }
+}
+
+output "external_secrets_role_arn" {
+  description = "IAM role the SecretStore in Stroom's namespace assumes; 20-platform's External Secrets controller may assume it."
+  value       = module.stroom.external_secrets_role_arn
 }
 
 output "stream_volume" {

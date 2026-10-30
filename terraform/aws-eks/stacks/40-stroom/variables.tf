@@ -90,6 +90,8 @@ variable "database" {
     backup_window         = optional(string, "01:00-02:00")
     performance_insights  = optional(bool, true)
     apply_immediately     = optional(bool, false)
+
+    app_user_password_version = optional(number, 1)
   })
   default = {}
 }
@@ -97,11 +99,12 @@ variable "database" {
 variable "idp" {
   description = "The external identity provider (app registration made outside Terraform). See modules/stroom/variables.tf."
   type = object({
-    type               = optional(string, "entra")
-    tenant_id          = optional(string)
-    discovery_url      = optional(string)
-    client_id          = string
-    client_secret_name = string
+    type                      = optional(string, "entra")
+    tenant_id                 = optional(string)
+    discovery_url             = optional(string)
+    client_id                 = string
+    client_secret_name        = string
+    client_secret_kms_key_arn = optional(string)
     first_admin = object({
       subject      = string
       display_name = string

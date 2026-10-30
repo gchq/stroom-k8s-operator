@@ -157,6 +157,14 @@ appConfig:
     hostname: "$${API_GATEWAY_HOST:-localhost}"
     port: "$${API_GATEWAY_PORT:-443}"
   receive:
+    # No data is posted to these nodes (design 9): it comes through the proxy
+    # and the bucket. Data feed keys are the only way a post could
+    # authenticate, and there are none (no files in dataFeedIdentitiesDir), so
+    # /datafeed refuses every post, however its path is spelt. The S3 event
+    # poll doesn't authenticate senders, so it is unaffected; it still applies
+    # receiptCheckMode to each object.
+    enabledAuthenticationTypes: ["DATA_FEED_KEY"]
+    authenticationRequired: true
     # Ingest from the proxy's data bucket, announced on its SQS queue (design 7.2).
     # No credentials: the default chain uses the pod's EKS Pod Identity role.
     s3Event:

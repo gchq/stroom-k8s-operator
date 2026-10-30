@@ -154,10 +154,10 @@ run "stroom_only_plan" {
     proxy_state = null
     ingest = {
       bucket            = "other-data"
-      queue_url         = "https://sqs.eu-west-2.amazonaws.com/210987654321/other-events"
-      queue_arn         = "arn:aws:sqs:eu-west-2:210987654321:other-events"
-      dlq_url           = "https://sqs.eu-west-2.amazonaws.com/210987654321/other-events-dlq"
-      dlq_arn           = "arn:aws:sqs:eu-west-2:210987654321:other-events-dlq"
+      queue_url         = "https://sqs.eu-west-2.amazonaws.com/444455556666/other-events"
+      queue_arn         = "arn:aws:sqs:eu-west-2:444455556666:other-events"
+      dlq_url           = "https://sqs.eu-west-2.amazonaws.com/444455556666/other-events-dlq"
+      dlq_arn           = "arn:aws:sqs:eu-west-2:444455556666:other-events-dlq"
       expire_after_days = null
     }
   }
@@ -166,6 +166,25 @@ run "stroom_only_plan" {
     condition     = output.proxy_downstream == null
     error_message = "Expected no proxy wiring in a Stroom-only cluster."
   }
+}
+
+# A 30-stroom-proxy state from before the outputs 40-stroom reads: the stack
+# check says so, rather than an "Unsupported attribute" error
+run "rejects_an_old_proxy_state" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.proxy[0]
+    values = {
+      outputs = {
+        namespace             = "stroom-proxy"
+        data_bucket           = "stroom-test-data"
+        data_events_queue_url = "https://sqs.eu-west-2.amazonaws.com/123456789012/stroom-test-data-events"
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.stack_checks]
 }
 
 run "rejects_a_cluster_without_stroom_nodes" {

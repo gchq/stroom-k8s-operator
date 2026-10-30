@@ -20,15 +20,17 @@ locals {
   platform = data.terraform_remote_state.platform.outputs
   proxy    = var.proxy_state == null ? null : data.terraform_remote_state.proxy[0].outputs
 
-  # From the proxy's stack, or for a bucket managed elsewhere from ingest (design 4.4)
+  # From the proxy's stack, or for a bucket managed elsewhere from ingest (design
+  # 4.4). try(): a proxy state from before these outputs lacks them, and
+  # stack_checks says so, rather than an "Unsupported attribute" error here.
   ingest = local.proxy == null ? var.ingest : {
-    bucket            = local.proxy.data_bucket
-    queue_url         = local.proxy.data_events_queue_url
-    queue_arn         = local.proxy.data_events_queue_arn
-    dlq_url           = local.proxy.data_events_dlq_url
-    dlq_arn           = local.proxy.data_events_dlq_arn
-    kms_key_arn       = local.proxy.data_bucket_kms_key_arn
-    expire_after_days = local.proxy.data_expire_after_days
+    bucket            = try(local.proxy.data_bucket, null)
+    queue_url         = try(local.proxy.data_events_queue_url, null)
+    queue_arn         = try(local.proxy.data_events_queue_arn, null)
+    dlq_url           = try(local.proxy.data_events_dlq_url, null)
+    dlq_arn           = try(local.proxy.data_events_dlq_arn, null)
+    kms_key_arn       = try(local.proxy.data_bucket_kms_key_arn, null)
+    expire_after_days = try(local.proxy.data_expire_after_days, null)
   }
 
   imported_certificate = var.imported_certificate_files == null ? null : {
@@ -62,9 +64,15 @@ resource "terraform_data" "stack_checks" {
       error_message = "Without proxy_state, ingest needs bucket, queue_url, queue_arn, dlq_url and dlq_arn: the data bucket Stroom reads (design 4.4)."
     }
 
+    # data_retention_days is always set by a proxy stack new enough for
+    # 40-stroom (data_expire_after_days may be null, and a null output isn't
+    # kept in state, so it can't tell an old state from no expiry)
     precondition {
-      condition     = local.proxy == null || try(local.proxy.data_events_queue_url, null) != null
-      error_message = "The proxy stack has no data events queue (its data_notifications must be \"sqs\"), or its state predates the outputs 40-stroom reads: apply 30-stroom-proxy first."
+      condition = local.proxy == null || (
+        try(local.proxy.data_retention_days, null) != null &&
+        alltrue([for k in ["namespace", "data_bucket", "data_events_queue_url", "data_events_queue_arn", "data_events_dlq_url", "data_events_dlq_arn"] : try(local.proxy[k], null) != null])
+      )
+      error_message = "The proxy stack has no data events queue (its data_notifications must be \"sqs\"), or its state predates the outputs 40-stroom reads (data_events_queue_arn, data_events_dlq_url, data_events_dlq_arn, data_retention_days, ...): apply 30-stroom-proxy first."
     }
   }
 }
@@ -117,13 +125,15 @@ module "stroom" {
   tags                      = var.tags
 
   db = {
-    host                   = module.stroom_db.host
-    port                   = module.stroom_db.port
-    master_user_secret_arn = module.stroom_db.master_user_secret_arn
-    app_user               = module.stroom_db.app_user
-    app_user_secret_name   = module.stroom_db.app_user_secret_name
-    kms_key_arn            = module.stroom_db.kms_key_arn
-    ca_bundle_pem          = data.http.rds_ca_bundle.response_body
+    host                      = module.stroom_db.host
+    port                      = module.stroom_db.port
+    master_user_secret_arn    = module.stroom_db.master_user_secret_arn
+    app_user                  = module.stroom_db.app_user
+    app_user_secret_name      = module.stroom_db.app_user_secret_name
+    app_user_secret_arn       = module.stroom_db.app_user_secret_arn
+    app_user_password_version = module.stroom_db.app_user_password_version
+    kms_key_arn               = module.stroom_db.kms_key_arn
+    ca_bundle_pem             = data.http.rds_ca_bundle.response_body
   }
 
   node_name_prefix = var.node_name_prefix
@@ -148,7 +158,7 @@ module "stroom" {
   alb_access_logs_bucket = var.alb_access_logs_bucket
 
   # The proxy reaches Stroom for receipt rules with its own API key (design 8.1)
-  proxy_namespace           = local.proxy == null ? null : local.proxy.namespace
+  proxy_namespace           = local.proxy == null ? null : try(local.proxy.namespace, null)
   proxy_api_key_secret_name = local.proxy == null ? null : var.proxy_api_key_secret_name
 
   depends_on = [terraform_data.stack_checks]

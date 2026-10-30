@@ -33,8 +33,10 @@ stopped = false # true stops every node for a version upgrade (design section 12
 
 # Keys and counts must match 10-infra's stroom_node_sets (one pod per node).
 node_sets = {
-  proc = { count = 2, role = "Processing", cpu = 30, memory_gib = 240, heap_gib = 64, data_volume_gb = 1000 }
-  ui   = { count = 1, role = "Frontend", cpu = 14, memory_gib = 120, heap_gib = 64, data_volume_gb = 200 }
+  # cpu leaves about 3 vCPUs per node for DaemonSets and the operator's API key Job,
+  # which runs next to a Stroom pod.
+  proc = { count = 2, role = "Processing", cpu = 29, memory_gib = 240, heap_gib = 64, data_volume_gb = 1000 }
+  ui   = { count = 1, role = "Frontend", cpu = 13, memory_gib = 120, heap_gib = 64, data_volume_gb = 200 }
 }
 extra_jvm_opts = [] # e.g. ["-XX:+UseZGC"]
 
@@ -48,6 +50,10 @@ database = {
   backup_retention_days = 14
   deletion_protection   = true
   max_connections       = 1000
+  # Raise (2, 3, ...) to give the Stroom database user a new password: the
+  # init Job sets it (the old one stays valid until the next change) and the
+  # Stroom nodes restart one at a time with it.
+  app_user_password_version = 1
 }
 
 # --- authentication: the app registration is made outside Terraform ---
@@ -60,6 +66,9 @@ idp = {
   discovery_url      = null # derived for entra
   client_id          = "11111111-1111-1111-1111-111111111111"
   client_secret_name = "stroom-oidc-client-secret"
+  # The client secret's KMS key, if a customer managed one (null: Secrets
+  # Manager's AWS managed key). Stroom's External Secrets role may decrypt with it.
+  client_secret_kms_key_arn = null
   first_admin = {
     subject      = "22222222-2222-2222-2222-222222222222" # the admin's Entra object ID (oid)
     display_name = "First Admin"
@@ -72,10 +81,10 @@ raw_data_retention_days = 60
 # For a Stroom-only cluster (proxy_state = null), the bucket managed elsewhere:
 # ingest = {
 #   bucket            = "other-data-bucket"
-#   queue_url         = "https://sqs.eu-west-2.amazonaws.com/210987654321/other-data-events"
-#   queue_arn         = "arn:aws:sqs:eu-west-2:210987654321:other-data-events"
-#   dlq_url           = "https://sqs.eu-west-2.amazonaws.com/210987654321/other-data-events-dlq"
-#   dlq_arn           = "arn:aws:sqs:eu-west-2:210987654321:other-data-events-dlq"
+#   queue_url         = "https://sqs.eu-west-2.amazonaws.com/444455556666/other-data-events"
+#   queue_arn         = "arn:aws:sqs:eu-west-2:444455556666:other-data-events"
+#   dlq_url           = "https://sqs.eu-west-2.amazonaws.com/444455556666/other-data-events-dlq"
+#   dlq_arn           = "arn:aws:sqs:eu-west-2:444455556666:other-data-events-dlq"
 #   kms_key_arn       = null
 #   expire_after_days = null
 # }

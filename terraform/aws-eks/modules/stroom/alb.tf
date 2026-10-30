@@ -220,15 +220,20 @@ resource "aws_lb_listener" "http" {
   tags = var.tags
 }
 
-# Cluster calls between nodes go pod to pod, never through the ALB (S13); data
-# comes through the proxy and S3, not Stroom's own datafeed (design 9)
+# Data comes through the proxy and S3, not Stroom's own datafeed (design 9).
+# Stroom itself refuses every post to /datafeed (receive settings in
+# config.yml), which is what counts: the ALB matches the raw path, so an
+# encoded one (/%64atafeed) gets past this rule, and Jetty decodes it. This
+# rule only stops the plain paths (ReceiveDataServlet's) at the edge. Stroom
+# 7.14 has no clustercall.rpc servlet: nodes call each other's REST API, pod to
+# pod. At most 5 wildcards per rule.
 resource "aws_lb_listener_rule" "refuse" {
   listener_arn = aws_lb_listener.https.arn
   priority     = 10
 
   condition {
     path_pattern {
-      values = ["*clustercall.rpc*", "/datafeed*", "/stroom/datafeed*", "/stroom/noauth/datafeed*", "/api/datafeed*"]
+      values = ["/datafeed*", "/stroom/datafeed*", "/stroom/noauth/datafeed*"]
     }
   }
 

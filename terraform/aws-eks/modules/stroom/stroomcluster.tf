@@ -65,8 +65,12 @@ locals {
       # Migrations run under a cluster-wide lock on the first start after an
       # upgrade, so allow up to an hour (S14)
       startupProbeTimings = { periodSeconds = 10, failureThreshold = 360 }
-      # The CloudWatch add-on mustn't inject its Java agent (proxy design F22)
-      podAnnotations = { "instrumentation.opentelemetry.io/inject-java" = "false" }
+      # The CloudWatch add-on mustn't inject its Java agent (proxy design F22).
+      # A new database password or TLS certificate restarts the nodes.
+      podAnnotations = merge(
+        { "instrumentation.opentelemetry.io/inject-java" = "false" },
+        local.restart_annotations,
+      )
 
       podSecurityContext = local.pod_security_context
       securityContext    = local.container_security_context
@@ -78,20 +82,45 @@ locals {
         value    = var.stroom_node_taint.value
         effect   = var.stroom_node_taint.effect
       }]
-      # One Stroom pod per node, spread over the AZs like the node groups
+      # One Stroom pod per node, spread over the AZs like the node groups.
+      #
+      # The operator's API key Job copies the first node set's affinity, but
+      # not its topology spread constraints, and runs next to a Stroom pod: a
+      # required anti-affinity would keep it off every node that has one, so
+      # the key could never be renewed. So the spread over hostnames (maxSkew
+      # 1, with count <= nodes) is what keeps the node set's pods on separate
+      # nodes; the anti-affinity, only on Stroom's own pods (stroom/nodeSet,
+      # which the Job doesn't carry), is a preference that keeps the node sets
+      # apart too if they ever share nodes.
       affinity = {
         podAntiAffinity = {
-          requiredDuringSchedulingIgnoredDuringExecution = [{
-            topologyKey   = "kubernetes.io/hostname"
-            labelSelector = { matchLabels = { "stroom/cluster" = var.cluster_resource_name } }
+          preferredDuringSchedulingIgnoredDuringExecution = [{
+            weight = 100
+            podAffinityTerm = {
+              topologyKey = "kubernetes.io/hostname"
+              labelSelector = {
+                matchExpressions = [
+                  { key = "stroom/cluster", operator = "In", values = [var.cluster_resource_name] },
+                  { key = "stroom/nodeSet", operator = "Exists" },
+                ]
+              }
+            }
           }]
         }
       }
-      topologySpreadConstraints = [{
-        maxSkew           = 1
-        topologyKey       = "topology.kubernetes.io/zone"
-        whenUnsatisfiable = "DoNotSchedule"
-      }]
+      # Without a label selector, the operator selects the node set's own pods
+      topologySpreadConstraints = [
+        {
+          maxSkew           = 1
+          topologyKey       = "topology.kubernetes.io/zone"
+          whenUnsatisfiable = "DoNotSchedule"
+        },
+        {
+          maxSkew           = 1
+          topologyKey       = "kubernetes.io/hostname"
+          whenUnsatisfiable = "DoNotSchedule"
+        },
+      ]
       podDisruptionBudget = { maxUnavailable = 1 }
     }
   ]
