@@ -365,6 +365,25 @@ state, so Terraform leaves them in place:
 terraform state list \
   | grep -E '^module\.stroom_proxy\.(aws_s3_bucket[a-z_]*\.data|aws_kms_(key|alias)\.data)\[' \
   | xargs terraform state rm
-``` EBS volumes holding proxy data are kept
-when the proxy is removed (by design), so look for them afterwards. The EBS
-CSI driver tags them with their PVC name (`kubernetes.io/created-for/pvc/name`).
+```
+
+The bucket keeps its event notification, which then points at the deleted
+SQS queue. That does no harm once nothing writes to the bucket.
+
+The receipt config bucket isn't protected, but it is versioned and Terraform
+won't delete it while it holds objects: delete every object version and
+delete marker first (the S3 console's **Empty** does this).
+
+Once the last object's retention has passed, empty and delete the data bucket
+yourself (the console's **Empty**, then **Delete**), then schedule its KMS
+key's deletion (7 days at the least):
+
+```sh
+aws kms schedule-key-deletion --key-id <data bucket key id> --pending-window-in-days 7
+```
+
+Proxy data volumes: removing a colour keeps its PVCs and EBS volumes (by
+design, section 9.2 of the design); destroying `30-stroom-proxy` deletes the
+namespace, and with it the remaining PVCs and their volumes. To check for
+leftovers, the EBS CSI driver tags volumes with their PVC name
+(`kubernetes.io/created-for/pvc/name`).
