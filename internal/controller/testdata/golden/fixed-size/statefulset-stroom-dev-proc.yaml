@@ -168,8 +168,7 @@ spec:
           name: data
           subPath: output
         - mountPath: /stroom/tmp
-          name: data
-          subPath: tmp
+          name: dir-tmp
         - mountPath: /stroom/lmdb
           name: data
           subPath: lmdb
@@ -183,14 +182,12 @@ spec:
           name: data
           subPath: proxy-repo
         - mountPath: /stroom/reference_data
-          name: data
-          subPath: reference-data
+          name: dir-reference-data
         - mountPath: /stroom/reference_staging_data
           name: data
           subPath: reference_staging_data
         - mountPath: /stroom/search_results
-          name: data
-          subPath: search-results
+          name: dir-search-results
         - mountPath: /stroom/api-key
           name: api-key
           readOnly: true
@@ -224,6 +221,14 @@ spec:
           - key: apiKey
             path: apiKey
           secretName: stroom-fixed-size-api-key
+      - emptyDir:
+          sizeLimit: 100Gi
+        name: dir-tmp
+      - emptyDir:
+          sizeLimit: 200Gi
+        name: dir-reference-data
+      - emptyDir: {}
+        name: dir-search-results
   updateStrategy: {}
   volumeClaimTemplates:
   - metadata:

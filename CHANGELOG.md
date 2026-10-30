@@ -13,6 +13,13 @@
 - NodeSets can set `topologySpreadConstraints` (a constraint without a label selector selects the NodeSet's own Pods)
   and `podDisruptionBudget` (`maxUnavailable`, default 1), which creates a PodDisruptionBudget for the NodeSet. The
   operator's ClusterRole gains PodDisruptionBudget permissions.
+- NodeSets can move Stroom's working directories off the local data volume with `directories` (`tmp`,
+  `referenceData`, `searchResults`, `lmdb`, `planb`, …): a directory with an `emptyDir` gets a volume of its own on the
+  node's ephemeral storage, for example instance-store NVMe, with an optional `sizeLimit`. Directories not set stay
+  on the local data volume, as before.
+- The operator no longer tries to change an existing StatefulSet's volume claim templates, which Kubernetes doesn't
+  allow, so a change to `localDataVolumeClaim` no longer makes every later update of the NodeSet fail. It applies to
+  new NodeSets only; existing PVCs are resized by hand.
 - NodeSet names are limited to 30 characters and a StroomCluster to 20 NodeSets, to keep the API server's validation
   cost bounded. Existing longer names are kept while unchanged.
 

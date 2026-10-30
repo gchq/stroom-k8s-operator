@@ -206,6 +206,19 @@ _Appears in:_ [DatabaseServer](#databaseserver)
 | `port` _integer_ |  |  |  |
 
 
+### DirectoryVolume
+
+
+DirectoryVolume is where a Stroom directory is stored, in place of the local data volume
+
+
+_Appears in:_ [NodeDirectories](#nodedirectories)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `emptyDir` _[EmptyDirVolumeSource](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#emptydirvolumesource-v1-core)_ | EmptyDir stores the directory on the node's ephemeral storage, such as instance-store NVMe, for the life of the<br />Pod. Use it for directories Stroom can rebuild or doesn't need to keep, and set a sizeLimit. |  | Required |
+
+
 ### HttpsSettings
 
 
@@ -321,6 +334,28 @@ _Appears in:_ [StroomClusterSpec](#stroomclusterspec)
 | `tls` _[TlsSettings](#tlssettings)_ |  |  |  |
 
 
+### NodeDirectories
+
+
+NodeDirectories places each of Stroom's working directories, under /stroom
+
+
+_Appears in:_ [NodeSet](#nodeset)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `logs` _[DirectoryVolume](#directoryvolume)_ | Logs is /stroom/logs: rolled application, access and audit logs |  |  |
+| `output` _[DirectoryVolume](#directoryvolume)_ | Output is /stroom/output: the output of pipeline file appenders |  |  |
+| `tmp` _[DirectoryVolume](#directoryvolume)_ | Tmp is /stroom/tmp: temporary files, including S3 objects being read |  |  |
+| `lmdb` _[DirectoryVolume](#directoryvolume)_ | Lmdb is /stroom/lmdb: LMDB stores that hold state, such as analytic rule results and duplicate checks |  |  |
+| `lmdbLibrary` _[DirectoryVolume](#directoryvolume)_ | LmdbLibrary is /stroom/lmdb_library: the LMDB native library, extracted on every start |  |  |
+| `planb` _[DirectoryVolume](#directoryvolume)_ | Planb is /stroom/planb: Plan B state stores |  |  |
+| `proxyRepo` _[DirectoryVolume](#directoryvolume)_ | ProxyRepo is /stroom/proxy_repo |  |  |
+| `referenceData` _[DirectoryVolume](#directoryvolume)_ | ReferenceData is /stroom/reference_data: the reference data LMDB store, which Stroom rebuilds as needed |  |  |
+| `referenceStagingData` _[DirectoryVolume](#directoryvolume)_ | ReferenceStagingData is /stroom/reference_staging_data: LMDB staging for reference data loads |  |  |
+| `searchResults` _[DirectoryVolume](#directoryvolume)_ | SearchResults is /stroom/search_results: LMDB stores of query results |  |  |
+
+
 ### NodeRole
 
 _Underlying type:_ string
@@ -352,6 +387,7 @@ _Appears in:_ [StroomClusterSpec](#stroomclusterspec)
 | `role` _[NodeRole](#noderole)_ | Role of each node in the NodeSet. `Processing` nodes receive and process data, while `Frontend` nodes serve<br />the Stroom user interface and API.<br />If this property is omitted, nodes in the NodeSet will assume both Processing and Frontend roles. |  | Enum: [Processing Frontend] |
 | `managedJobs` _string array_ | Automatically enable the specified job(s) on node startup and disable them prior to node shutdown.<br />If omitted, nodes with the `Processing` role or no role enable and disable all jobs, while `Frontend` nodes<br />only manage the job `Reindex Content`.<br />Jobs that aren't managed may be enabled or disabled via the Stroom Jobs pane. |  |  |
 | `localDataVolumeClaim` _[PersistentVolumeClaimSpec](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#persistentvolumeclaimspec-v1-core)_ | LocalDataVolumeClaim provides persistent storage for each Stroom node's data |  |  |
+| `directories` _[NodeDirectories](#nodedirectories)_ | Directories moves Stroom's working directories off the local data volume. Each directory that isn't set stays on<br />the local data volume, in a sub-directory of its own. |  |  |
 | `extraVolumeMounts` _[VolumeMount](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#volumemount-v1-core) array_ | Extra volume mounts to add to each NodeSet pod, in addition to volume mounts defined at the StroomCluster level. |  |  |
 | `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#resourcerequirements-v1-core)_ | Resources determine how much CPU and memory each individual Stroom node Pod within the NodeSet requests and is<br />limited to. |  |  |
 | `memoryOptions` _[JvmMemoryOptions](#jvmmemoryoptions)_ | MemoryOptions define JVM memory parameters |  |  |

@@ -3533,6 +3533,340 @@ spec:
                       format: int32
                       minimum: 1
                       type: integer
+                    directories:
+                      description: |-
+                        Directories moves Stroom's working directories off the local data volume. Each directory that isn't set stays on
+                        the local data volume, in a sub-directory of its own.
+                      properties:
+                        lmdb:
+                          description: 'Lmdb is /stroom/lmdb: LMDB stores that hold
+                            state, such as analytic rule results and duplicate checks'
+                          properties:
+                            emptyDir:
+                              description: |-
+                                EmptyDir stores the directory on the node's ephemeral storage, such as instance-store NVMe, for the life of the
+                                Pod. Use it for directories Stroom can rebuild or doesn't need to keep, and set a sizeLimit.
+                              properties:
+                                medium:
+                                  description: |-
+                                    medium represents what type of storage medium should back this directory.
+                                    The default is "" which means to use the node's default medium.
+                                    Must be an empty string (default) or Memory.
+                                    More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                  type: string
+                                sizeLimit:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  description: |-
+                                    sizeLimit is the total amount of local storage required for this EmptyDir volume.
+                                    The size limit is also applicable for memory medium.
+                                    The maximum usage on memory medium EmptyDir would be the minimum value between
+                                    the SizeLimit specified here and the sum of memory limits of all containers in a pod.
+                                    The default is nil which means that the limit is undefined.
+                                    More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              type: object
+                          required:
+                          - emptyDir
+                          type: object
+                        lmdbLibrary:
+                          description: 'LmdbLibrary is /stroom/lmdb_library: the LMDB
+                            native library, extracted on every start'
+                          properties:
+                            emptyDir:
+                              description: |-
+                                EmptyDir stores the directory on the node's ephemeral storage, such as instance-store NVMe, for the life of the
+                                Pod. Use it for directories Stroom can rebuild or doesn't need to keep, and set a sizeLimit.
+                              properties:
+                                medium:
+                                  description: |-
+                                    medium represents what type of storage medium should back this directory.
+                                    The default is "" which means to use the node's default medium.
+                                    Must be an empty string (default) or Memory.
+                                    More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                  type: string
+                                sizeLimit:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  description: |-
+                                    sizeLimit is the total amount of local storage required for this EmptyDir volume.
+                                    The size limit is also applicable for memory medium.
+                                    The maximum usage on memory medium EmptyDir would be the minimum value between
+                                    the SizeLimit specified here and the sum of memory limits of all containers in a pod.
+                                    The default is nil which means that the limit is undefined.
+                                    More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              type: object
+                          required:
+                          - emptyDir
+                          type: object
+                        logs:
+                          description: 'Logs is /stroom/logs: rolled application,
+                            access and audit logs'
+                          properties:
+                            emptyDir:
+                              description: |-
+                                EmptyDir stores the directory on the node's ephemeral storage, such as instance-store NVMe, for the life of the
+                                Pod. Use it for directories Stroom can rebuild or doesn't need to keep, and set a sizeLimit.
+                              properties:
+                                medium:
+                                  description: |-
+                                    medium represents what type of storage medium should back this directory.
+                                    The default is "" which means to use the node's default medium.
+                                    Must be an empty string (default) or Memory.
+                                    More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                  type: string
+                                sizeLimit:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  description: |-
+                                    sizeLimit is the total amount of local storage required for this EmptyDir volume.
+                                    The size limit is also applicable for memory medium.
+                                    The maximum usage on memory medium EmptyDir would be the minimum value between
+                                    the SizeLimit specified here and the sum of memory limits of all containers in a pod.
+                                    The default is nil which means that the limit is undefined.
+                                    More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              type: object
+                          required:
+                          - emptyDir
+                          type: object
+                        output:
+                          description: 'Output is /stroom/output: the output of pipeline
+                            file appenders'
+                          properties:
+                            emptyDir:
+                              description: |-
+                                EmptyDir stores the directory on the node's ephemeral storage, such as instance-store NVMe, for the life of the
+                                Pod. Use it for directories Stroom can rebuild or doesn't need to keep, and set a sizeLimit.
+                              properties:
+                                medium:
+                                  description: |-
+                                    medium represents what type of storage medium should back this directory.
+                                    The default is "" which means to use the node's default medium.
+                                    Must be an empty string (default) or Memory.
+                                    More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                  type: string
+                                sizeLimit:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  description: |-
+                                    sizeLimit is the total amount of local storage required for this EmptyDir volume.
+                                    The size limit is also applicable for memory medium.
+                                    The maximum usage on memory medium EmptyDir would be the minimum value between
+                                    the SizeLimit specified here and the sum of memory limits of all containers in a pod.
+                                    The default is nil which means that the limit is undefined.
+                                    More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              type: object
+                          required:
+                          - emptyDir
+                          type: object
+                        planb:
+                          description: 'Planb is /stroom/planb: Plan B state stores'
+                          properties:
+                            emptyDir:
+                              description: |-
+                                EmptyDir stores the directory on the node's ephemeral storage, such as instance-store NVMe, for the life of the
+                                Pod. Use it for directories Stroom can rebuild or doesn't need to keep, and set a sizeLimit.
+                              properties:
+                                medium:
+                                  description: |-
+                                    medium represents what type of storage medium should back this directory.
+                                    The default is "" which means to use the node's default medium.
+                                    Must be an empty string (default) or Memory.
+                                    More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                  type: string
+                                sizeLimit:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  description: |-
+                                    sizeLimit is the total amount of local storage required for this EmptyDir volume.
+                                    The size limit is also applicable for memory medium.
+                                    The maximum usage on memory medium EmptyDir would be the minimum value between
+                                    the SizeLimit specified here and the sum of memory limits of all containers in a pod.
+                                    The default is nil which means that the limit is undefined.
+                                    More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              type: object
+                          required:
+                          - emptyDir
+                          type: object
+                        proxyRepo:
+                          description: ProxyRepo is /stroom/proxy_repo
+                          properties:
+                            emptyDir:
+                              description: |-
+                                EmptyDir stores the directory on the node's ephemeral storage, such as instance-store NVMe, for the life of the
+                                Pod. Use it for directories Stroom can rebuild or doesn't need to keep, and set a sizeLimit.
+                              properties:
+                                medium:
+                                  description: |-
+                                    medium represents what type of storage medium should back this directory.
+                                    The default is "" which means to use the node's default medium.
+                                    Must be an empty string (default) or Memory.
+                                    More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                  type: string
+                                sizeLimit:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  description: |-
+                                    sizeLimit is the total amount of local storage required for this EmptyDir volume.
+                                    The size limit is also applicable for memory medium.
+                                    The maximum usage on memory medium EmptyDir would be the minimum value between
+                                    the SizeLimit specified here and the sum of memory limits of all containers in a pod.
+                                    The default is nil which means that the limit is undefined.
+                                    More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              type: object
+                          required:
+                          - emptyDir
+                          type: object
+                        referenceData:
+                          description: 'ReferenceData is /stroom/reference_data: the
+                            reference data LMDB store, which Stroom rebuilds as needed'
+                          properties:
+                            emptyDir:
+                              description: |-
+                                EmptyDir stores the directory on the node's ephemeral storage, such as instance-store NVMe, for the life of the
+                                Pod. Use it for directories Stroom can rebuild or doesn't need to keep, and set a sizeLimit.
+                              properties:
+                                medium:
+                                  description: |-
+                                    medium represents what type of storage medium should back this directory.
+                                    The default is "" which means to use the node's default medium.
+                                    Must be an empty string (default) or Memory.
+                                    More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                  type: string
+                                sizeLimit:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  description: |-
+                                    sizeLimit is the total amount of local storage required for this EmptyDir volume.
+                                    The size limit is also applicable for memory medium.
+                                    The maximum usage on memory medium EmptyDir would be the minimum value between
+                                    the SizeLimit specified here and the sum of memory limits of all containers in a pod.
+                                    The default is nil which means that the limit is undefined.
+                                    More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              type: object
+                          required:
+                          - emptyDir
+                          type: object
+                        referenceStagingData:
+                          description: 'ReferenceStagingData is /stroom/reference_staging_data:
+                            LMDB staging for reference data loads'
+                          properties:
+                            emptyDir:
+                              description: |-
+                                EmptyDir stores the directory on the node's ephemeral storage, such as instance-store NVMe, for the life of the
+                                Pod. Use it for directories Stroom can rebuild or doesn't need to keep, and set a sizeLimit.
+                              properties:
+                                medium:
+                                  description: |-
+                                    medium represents what type of storage medium should back this directory.
+                                    The default is "" which means to use the node's default medium.
+                                    Must be an empty string (default) or Memory.
+                                    More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                  type: string
+                                sizeLimit:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  description: |-
+                                    sizeLimit is the total amount of local storage required for this EmptyDir volume.
+                                    The size limit is also applicable for memory medium.
+                                    The maximum usage on memory medium EmptyDir would be the minimum value between
+                                    the SizeLimit specified here and the sum of memory limits of all containers in a pod.
+                                    The default is nil which means that the limit is undefined.
+                                    More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              type: object
+                          required:
+                          - emptyDir
+                          type: object
+                        searchResults:
+                          description: 'SearchResults is /stroom/search_results: LMDB
+                            stores of query results'
+                          properties:
+                            emptyDir:
+                              description: |-
+                                EmptyDir stores the directory on the node's ephemeral storage, such as instance-store NVMe, for the life of the
+                                Pod. Use it for directories Stroom can rebuild or doesn't need to keep, and set a sizeLimit.
+                              properties:
+                                medium:
+                                  description: |-
+                                    medium represents what type of storage medium should back this directory.
+                                    The default is "" which means to use the node's default medium.
+                                    Must be an empty string (default) or Memory.
+                                    More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                  type: string
+                                sizeLimit:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  description: |-
+                                    sizeLimit is the total amount of local storage required for this EmptyDir volume.
+                                    The size limit is also applicable for memory medium.
+                                    The maximum usage on memory medium EmptyDir would be the minimum value between
+                                    the SizeLimit specified here and the sum of memory limits of all containers in a pod.
+                                    The default is nil which means that the limit is undefined.
+                                    More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              type: object
+                          required:
+                          - emptyDir
+                          type: object
+                        tmp:
+                          description: 'Tmp is /stroom/tmp: temporary files, including
+                            S3 objects being read'
+                          properties:
+                            emptyDir:
+                              description: |-
+                                EmptyDir stores the directory on the node's ephemeral storage, such as instance-store NVMe, for the life of the
+                                Pod. Use it for directories Stroom can rebuild or doesn't need to keep, and set a sizeLimit.
+                              properties:
+                                medium:
+                                  description: |-
+                                    medium represents what type of storage medium should back this directory.
+                                    The default is "" which means to use the node's default medium.
+                                    Must be an empty string (default) or Memory.
+                                    More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                  type: string
+                                sizeLimit:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  description: |-
+                                    sizeLimit is the total amount of local storage required for this EmptyDir volume.
+                                    The size limit is also applicable for memory medium.
+                                    The maximum usage on memory medium EmptyDir would be the minimum value between
+                                    the SizeLimit specified here and the sum of memory limits of all containers in a pod.
+                                    The default is nil which means that the limit is undefined.
+                                    More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              type: object
+                          required:
+                          - emptyDir
+                          type: object
+                      type: object
                     extraVolumeMounts:
                       description: Extra volume mounts to add to each NodeSet pod,
                         in addition to volume mounts defined at the StroomCluster

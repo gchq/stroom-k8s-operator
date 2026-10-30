@@ -33,6 +33,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -319,6 +320,14 @@ func (r *StroomClusterReconciler) reconcileNodeStatefulSet(ctx context.Context, 
 		existingStatefulSet.Labels = newStatefulSet.Labels
 		existingStatefulSet.Annotations = newStatefulSet.Annotations
 		existingStatefulSet.OwnerReferences = newStatefulSet.OwnerReferences
+		if existingStatefulSet.ResourceVersion != "" {
+			// A StatefulSet's volumeClaimTemplates can't be changed, so keep the ones it was created with rather than
+			// have every later update refused. A change to localDataVolumeClaim applies to new clusters only.
+			if !volumeClaimTemplatesMatch(existingStatefulSet.Spec.VolumeClaimTemplates, newStatefulSet.Spec.VolumeClaimTemplates) {
+				logger.Info("Keeping the StatefulSet's existing volume claim templates, which can't be changed", "Namespace", existingStatefulSet.Namespace, "Name", existingStatefulSet.Name)
+			}
+			newStatefulSet.Spec.VolumeClaimTemplates = existingStatefulSet.Spec.VolumeClaimTemplates
+		}
 		existingStatefulSet.Spec = newStatefulSet.Spec
 		return nil
 	})
@@ -375,6 +384,24 @@ func (r *StroomClusterReconciler) reconcilePodDisruptionBudget(ctx context.Conte
 	}
 	logger.Info("PodDisruptionBudget reconciled", "Result", operationResult, "Namespace", existingPdb.Namespace, "Name", existingPdb.Name)
 	return nil
+}
+
+// volumeClaimTemplatesMatch returns whether two lists of volume claim templates ask for the same claims: the same
+// names, access modes, storage class and storage requests. Fields the API server defaults are ignored.
+func volumeClaimTemplatesMatch(existing []corev1.PersistentVolumeClaim, desired []corev1.PersistentVolumeClaim) bool {
+	if len(existing) != len(desired) {
+		return false
+	}
+	for i := range existing {
+		a, b := existing[i], desired[i]
+		if a.Name != b.Name ||
+			!equality.Semantic.DeepEqual(a.Spec.AccessModes, b.Spec.AccessModes) ||
+			!equality.Semantic.DeepEqual(a.Spec.Resources.Requests, b.Spec.Resources.Requests) ||
+			(b.Spec.StorageClassName != nil && !equality.Semantic.DeepEqual(a.Spec.StorageClassName, b.Spec.StorageClassName)) {
+			return false
+		}
+	}
+	return true
 }
 
 // databaseServerSettled returns whether a DatabaseServer's StatefulSet has the Pod template the operator would apply

@@ -308,7 +308,7 @@ Decided: the operator, after merging upstream (S19). The lifecycle handling is t
 ### 10.2 Operator changes for v1
 
 1. Node names and fixed size (section 11.1): an optional, immutable `nodeNamePrefix` field; an opt-in `preventNodeRemoval` field whose CRD rule stops a node set's `count` going down and a node set being removed or renamed; and a `stopped` field that scales every node set to 0 for version upgrades without changing `count` (and keeps the PVCs). **Done** on branch `stroom-eks`.
-2. Storage: let each node set map Stroom directories to `emptyDir` (with `sizeLimit`) or to the data PVC, rather than fixed subpaths; allow extra claim templates; don't rewrite `volumeClaimTemplates` on update (S18).
+2. Storage: let each node set map Stroom directories to `emptyDir` (with `sizeLimit`) or to the data PVC, rather than fixed subpaths; don't rewrite `volumeClaimTemplates` on update (S18). **Done** on branch `stroom-eks` (`directories`). Extra claim templates aren't needed: the index volume is a sub-directory of the data PVC and EFS is a cluster-level `extraVolumes` entry, each mounted with `extraVolumeMounts`.
 3. A PodDisruptionBudget per node set (opt-in, `podDisruptionBudget.maxUnavailable`, default 1) and `topologySpreadConstraints` (not upstream). **Done** on branch `stroom-eks`.
 4. JDBC options (TLS) on the external database connection (upstream only added TLS to the operator's own MySQL connection).
 5. Pod and container security contexts that pass the `restricted` Pod Security level, building on upstream's hardening (S19): run as uid 1000 rather than starting as root; log-sender off.

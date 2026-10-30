@@ -341,47 +341,11 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 	}, {
 		Name:      StroomApiTokenVolumeName,
 		MountPath: StroomApiTokenMountPath,
-	}, {
-		Name:      StroomNodePvcName,
-		SubPath:   "logs",
-		MountPath: "/stroom/logs",
-	}, {
-		Name:      StroomNodePvcName,
-		SubPath:   "output",
-		MountPath: "/stroom/output",
-	}, {
-		Name:      StroomNodePvcName,
-		SubPath:   "tmp",
-		MountPath: "/stroom/tmp",
-	}, {
-		Name:      StroomNodePvcName,
-		SubPath:   "lmdb",
-		MountPath: "/stroom/lmdb",
-	}, {
-		Name:      StroomNodePvcName,
-		SubPath:   "lmdb_library",
-		MountPath: "/stroom/lmdb_library",
-	}, {
-		Name:      StroomNodePvcName,
-		SubPath:   "planb",
-		MountPath: "/stroom/planb",
-	}, {
-		Name:      StroomNodePvcName,
-		SubPath:   "proxy-repo",
-		MountPath: "/stroom/proxy_repo",
-	}, {
-		Name:      StroomNodePvcName,
-		SubPath:   "reference-data",
-		MountPath: "/stroom/reference_data",
-	}, {
-		Name:      StroomNodePvcName,
-		SubPath:   "reference_staging_data",
-		MountPath: "/stroom/reference_staging_data",
-	}, {
-		Name:      StroomNodePvcName,
-		SubPath:   "search-results",
-		MountPath: "/stroom/search_results",
 	}}
+
+	directoryVolumes, directoryMounts := nodeDirectoryVolumes(nodeSet)
+	volumes = append(volumes, directoryVolumes...)
+	volumeMounts = append(volumeMounts, directoryMounts...)
 
 	if stroomCluster.Spec.GetIdentityProviderType() == stroomv1.InternalIdp {
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{
@@ -536,6 +500,58 @@ func (r *StroomClusterReconciler) createStatefulSet(stroomCluster *stroomv1.Stro
 
 	ctrl.SetControllerReference(stroomCluster, statefulSet, r.Scheme)
 	return statefulSet
+}
+
+// nodeDirectory is one of Stroom's working directories: its sub-directory on the local data volume, its mount path,
+// and where a NodeSet puts it instead, if anywhere
+type nodeDirectory struct {
+	subPath   string
+	mountPath string
+	volume    func(*stroomv1.NodeDirectories) *stroomv1.DirectoryVolume
+}
+
+var nodeDirectories = []nodeDirectory{
+	{"logs", "/stroom/logs", func(d *stroomv1.NodeDirectories) *stroomv1.DirectoryVolume { return d.Logs }},
+	{"output", "/stroom/output", func(d *stroomv1.NodeDirectories) *stroomv1.DirectoryVolume { return d.Output }},
+	{"tmp", "/stroom/tmp", func(d *stroomv1.NodeDirectories) *stroomv1.DirectoryVolume { return d.Tmp }},
+	{"lmdb", "/stroom/lmdb", func(d *stroomv1.NodeDirectories) *stroomv1.DirectoryVolume { return d.Lmdb }},
+	{"lmdb_library", "/stroom/lmdb_library", func(d *stroomv1.NodeDirectories) *stroomv1.DirectoryVolume { return d.LmdbLibrary }},
+	{"planb", "/stroom/planb", func(d *stroomv1.NodeDirectories) *stroomv1.DirectoryVolume { return d.Planb }},
+	{"proxy-repo", "/stroom/proxy_repo", func(d *stroomv1.NodeDirectories) *stroomv1.DirectoryVolume { return d.ProxyRepo }},
+	{"reference-data", "/stroom/reference_data", func(d *stroomv1.NodeDirectories) *stroomv1.DirectoryVolume { return d.ReferenceData }},
+	{"reference_staging_data", "/stroom/reference_staging_data", func(d *stroomv1.NodeDirectories) *stroomv1.DirectoryVolume { return d.ReferenceStagingData }},
+	{"search-results", "/stroom/search_results", func(d *stroomv1.NodeDirectories) *stroomv1.DirectoryVolume { return d.SearchResults }},
+}
+
+// nodeDirectoryVolumes returns the volumes and mounts for Stroom's working directories: a sub-directory of the local
+// data volume each, unless the NodeSet puts the directory on a volume of its own
+func nodeDirectoryVolumes(nodeSet *stroomv1.NodeSet) ([]corev1.Volume, []corev1.VolumeMount) {
+	var volumes []corev1.Volume
+	var mounts []corev1.VolumeMount
+	for _, directory := range nodeDirectories {
+		var volume *stroomv1.DirectoryVolume
+		if nodeSet.Directories != nil {
+			volume = directory.volume(nodeSet.Directories)
+		}
+		if volume == nil || volume.EmptyDir == nil {
+			mounts = append(mounts, corev1.VolumeMount{
+				Name:      StroomNodePvcName,
+				SubPath:   directory.subPath,
+				MountPath: directory.mountPath,
+			})
+			continue
+		}
+		name := "dir-" + strings.ReplaceAll(directory.subPath, "_", "-")
+		volumes = append(volumes, corev1.Volume{
+			Name:         name,
+			VolumeSource: corev1.VolumeSource{EmptyDir: volume.EmptyDir.DeepCopy()},
+		})
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      name,
+			MountPath: directory.mountPath,
+		})
+	}
+	return volumes, mounts
 }
 
 // topologySpreadConstraints returns the NodeSet's topology spread constraints, selecting the NodeSet's own Pods

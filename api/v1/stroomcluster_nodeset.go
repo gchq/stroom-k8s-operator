@@ -31,6 +31,9 @@ type NodeSet struct {
 	ManagedJobs []string `json:"managedJobs,omitempty"`
 	// LocalDataVolumeClaim provides persistent storage for each Stroom node's data
 	LocalDataVolumeClaim corev1.PersistentVolumeClaimSpec `json:"localDataVolumeClaim"`
+	// Directories moves Stroom's working directories off the local data volume. Each directory that isn't set stays on
+	// the local data volume, in a sub-directory of its own.
+	Directories *NodeDirectories `json:"directories,omitempty"`
 	// Extra volume mounts to add to each NodeSet pod, in addition to volume mounts defined at the StroomCluster level.
 	ExtraVolumeMounts []corev1.VolumeMount `json:"extraVolumeMounts,omitempty"`
 	// Resources determine how much CPU and memory each individual Stroom node Pod within the NodeSet requests and is
@@ -76,6 +79,38 @@ type NodeSet struct {
 	// PodDisruptionBudget, if set, creates a PodDisruptionBudget for the NodeSet's Pods, so that voluntary disruptions
 	// such as node drains stop only so many Stroom nodes at once.
 	PodDisruptionBudget *PodDisruptionBudgetSettings `json:"podDisruptionBudget,omitempty"`
+}
+
+// NodeDirectories places each of Stroom's working directories, under /stroom
+type NodeDirectories struct {
+	// Logs is /stroom/logs: rolled application, access and audit logs
+	Logs *DirectoryVolume `json:"logs,omitempty"`
+	// Output is /stroom/output: the output of pipeline file appenders
+	Output *DirectoryVolume `json:"output,omitempty"`
+	// Tmp is /stroom/tmp: temporary files, including S3 objects being read
+	Tmp *DirectoryVolume `json:"tmp,omitempty"`
+	// Lmdb is /stroom/lmdb: LMDB stores that hold state, such as analytic rule results and duplicate checks
+	Lmdb *DirectoryVolume `json:"lmdb,omitempty"`
+	// LmdbLibrary is /stroom/lmdb_library: the LMDB native library, extracted on every start
+	LmdbLibrary *DirectoryVolume `json:"lmdbLibrary,omitempty"`
+	// Planb is /stroom/planb: Plan B state stores
+	Planb *DirectoryVolume `json:"planb,omitempty"`
+	// ProxyRepo is /stroom/proxy_repo
+	ProxyRepo *DirectoryVolume `json:"proxyRepo,omitempty"`
+	// ReferenceData is /stroom/reference_data: the reference data LMDB store, which Stroom rebuilds as needed
+	ReferenceData *DirectoryVolume `json:"referenceData,omitempty"`
+	// ReferenceStagingData is /stroom/reference_staging_data: LMDB staging for reference data loads
+	ReferenceStagingData *DirectoryVolume `json:"referenceStagingData,omitempty"`
+	// SearchResults is /stroom/search_results: LMDB stores of query results
+	SearchResults *DirectoryVolume `json:"searchResults,omitempty"`
+}
+
+// DirectoryVolume is where a Stroom directory is stored, in place of the local data volume
+type DirectoryVolume struct {
+	// EmptyDir stores the directory on the node's ephemeral storage, such as instance-store NVMe, for the life of the
+	// Pod. Use it for directories Stroom can rebuild or doesn't need to keep, and set a sizeLimit.
+	// +kubebuilder:validation:Required
+	EmptyDir *corev1.EmptyDirVolumeSource `json:"emptyDir"`
 }
 
 type PodDisruptionBudgetSettings struct {

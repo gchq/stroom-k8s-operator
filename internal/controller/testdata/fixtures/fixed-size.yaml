@@ -1,4 +1,5 @@
-# A fixed-size StroomCluster with its own node names, spread across zones, with disruption budgets
+# A fixed-size StroomCluster with its own node names, spread across zones, with disruption budgets and some
+# directories on node-local ephemeral storage
 apiVersion: stroom.gchq.github.io/v1
 kind: DatabaseServer
 metadata:
@@ -42,6 +43,15 @@ spec:
       memoryOptions:
         initialPercentage: 50
         maxPercentage: 75
+      directories:
+        tmp:
+          emptyDir:
+            sizeLimit: 100Gi
+        referenceData:
+          emptyDir:
+            sizeLimit: 200Gi
+        searchResults:
+          emptyDir: {}
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: topology.kubernetes.io/zone
