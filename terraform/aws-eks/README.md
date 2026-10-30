@@ -488,10 +488,58 @@ through the proxy image's config check.
   may lag the control plane by up to three minor versions, so they can catch up
   at the next blue/green. See section 9 of the design.
 
+### After the 2026-10-30 audit
+
+* **External Secrets isolation, one-time order:** apply `20-platform` first
+  (its External Secrets controller then reads no secrets itself and may only
+  assume roles named `<cluster>-*`), then `30-stroom-proxy` and `40-stroom`
+  straight after, which create their own roles (`<name>-pxeso-*`,
+  `<name>-steso-*`) and point their SecretStores at them. In between, synced
+  Secrets keep working but refreshes fail with AccessDenied. `20-platform`
+  needs `terraform init` first, for the new `hashicorp/time` provider.
+* **Lock admins:** list every identity that will run `30-stroom-proxy` (CI,
+  break-glass) in `admin_principal_arns`. Only they can now change the data
+  key's and bucket's policies; KMS has no root override.
+* **Node counts** (`nodes_per_az`, `system_node_count`, Stroom `node_count`)
+  change in one apply: Terraform gives the node group module each group's
+  current size and then runs `aws eks update-nodegroup-config` (min = max =
+  desired), so the machine running Terraform needs the AWS CLI v2 with the same
+  credentials. A failed resize is retried on the next apply. Proxy counts may
+  go down; Stroom counts only up.
+* **AZs and subnets:** node groups are keyed by subnet position. After the
+  first apply, set `azs` to the `availability_zones` output, and never reorder
+  or remove entries (only append). The plan refuses a node group moving subnet,
+  a Stroom group shrinking, or a Stroom set losing an AZ group.
+* **Stroom node AMI, version or instance type:** one AZ group at a time with
+  `stroom_node_sets.<set>.az_overrides` (design section 18), never the
+  set-level value directly on a running cluster.
+* **Stroom operator image:** with this repository's operator charts (the
+  default), `20-platform` requires `stroom_operator.image_repository` and
+  `image_tag`, an image built from the same commit.
+* **In-cluster CA rotation, Stroom certificate renewal, database password and
+  proxy key rotation:** runbooks in the Stroom design, section 18.
+
 ## Destroy
 
-Destroy the stacks in reverse order: `30-stroom-proxy`, then `20-platform`,
-then `10-infra`, which removes the cluster and the VPC.
+Destroy the stacks in reverse order: `40-stroom`, then `30-stroom-proxy`,
+then `20-platform`, then `10-infra`, which removes the cluster and the VPC.
+`40-stroom` must go before `20-platform`: the StroomCluster has a finalizer
+that only the operator (installed by `20-platform`) removes, after draining
+the nodes, so destroying the operator first leaves `40-stroom`'s destroy
+waiting forever.
+
+`40-stroom` keeps some things, deliberately:
+
+* The EFS file system (Stroom's written streams) is protected
+  (`prevent_destroy`). Remove it from the state first, as for the data bucket
+  below, and delete it yourself once its data isn't needed:
+  `terraform state rm module.stroom.aws_efs_file_system.stream`.
+* The database has deletion protection and takes a final snapshot. Set
+  `database.deletion_protection = false` and apply before destroying; the
+  final snapshot (`<name>-stroom-final`) stays until you delete it.
+* The nodes' EBS data volumes (index shards) belong to PersistentVolumeClaims
+  the operator keeps (`volumeClaimDeletePolicy` isn't set). Delete the PVCs in the
+  `stroom` namespace if the data isn't needed, before destroying `10-infra`.
 
 The data bucket and its KMS key are protected (`prevent_destroy`), and AWS
 won't delete a bucket that holds locked objects anyway. To destroy

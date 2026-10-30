@@ -491,7 +491,7 @@ waf_web_acl_arn        = null
 
 privatelink = {
   enabled              = true
-  allowed_principals   = ["arn:aws:iam::210987654321:root"]
+  allowed_principals   = ["arn:aws:iam::444455556666:root"]
   acceptance_required  = true
   verification_zone_id = null               # public zone for the ownership TXT records, if in Route 53
 }
@@ -694,3 +694,20 @@ These would need GitHub issues raised by a person:
 * Restricting egress in the NetworkPolicy to known destinations.
 * Full-cluster blue/green (a second cluster behind the same endpoint services), for changes that can't be made in place.
 * Multi-region deployment.
+
+### 17.5 Audit follow-up (2026-10-30)
+
+An audit of the branch changed the proxy as follows. The next apply rolls the proxy pods once (config and probe changes); nothing in AWS is replaced.
+
+| | Finding | Change |
+|---|---|---|
+| F29 | The chart's `merge` turned a forward destination's `enabled: false` into `true`. | Only a missing `enabled` defaults to true; the chart validation checks rendered flags and that an all-disabled config is refused. |
+| F30 | The proxy copies every request header **and query string parameter** into stored meta (`AttributeMapUtil.create`). Behind the ALB it never sets `RemoteDN`/`RemoteCertExpiry` (F21; `X-SSL-Client-V-End` becomes `RemoteCertExpiry`), and keeps a sender's `RemoteAddress`/`RemoteHost` when the request also has `GUID`. Receipt policy rules match on `RemoteDN` and `RemoteHost`. | Every listener (main and test, mTLS and plain) returns 403 for those five keys as headers (one rule each) and as query parameters (one rule, 5 values). `alb_reject_client_meta = false` turns it off for older upstream proxies. **To test in dev:** that the ALB matches query string keys case-insensitively (`?remotedn=x`). |
+| F31 | Jetty's `useForwardedHeaders` also honours `Forwarded`, `X-Forwarded-Host`, `X-Forwarded-Server` and `X-Proxied-Https`, which the ALB passes through. | The chart turns `useForwardedHeaders` off: with X-Forwarded-For removed (F19) it added nothing, and `Forwarded: for=` could forge `RemoteAddress`. |
+| F32 | The External Secrets controller's role read every secret under the prefix, for any SecretStore in any namespace. | The controller's role only assumes roles named `<cluster>-*`. 30-stroom-proxy creates `<name>-pxeso-*` (when the proxy has secrets), trusting only the controller's role, reading exactly the proxy's secrets, decrypting only through Secrets Manager; its SecretStore names it. External Secrets' and cert-manager's rights are no longer aggregated into the `edit`/`admin` roles. **Upgrade order:** apply 20-platform, then 30-stroom-proxy (and 40-stroom) straight after; in between, synced Secrets keep working but refreshes fail with AccessDenied. |
+| F33 | The data key policy didn't stop an admin re-policying the key (then deleting it, making locked data unreadable), and the bucket policy could be removed. | Only the lock admins may also `PutKeyPolicy`, `DeleteImportedKeyMaterial` or create grants (except grants AWS services make for their own resources), and `PutBucketPolicy`/`DeleteBucketPolicy`. **List every identity that will run the stack** (CI, break-glass) in `admin_principal_arns`: any other can't update either policy, and KMS has no root override. The proxy role uses the key only through S3 (`kms:ViaService`). |
+| F34 | Liveness used the filtered health check, so an S3 or downstream outage could restart every pod. | Liveness uses `/proxyAdmin/ping` (`livenessCheckPath`); readiness and startup keep the filtered check. |
+
+Also: the chart README example no longer shares a service account across colours or a `proxyId` across pods; the dev README's paths and expected log lines are fixed; the release workflow's actions are pinned to commits, with least-privilege permissions and a current Helm.
+
+**Known limit: the lb subnets are a trust boundary.** The NetworkPolicy and node security group rules admit anything with an address in the lb subnets on the proxy's ports, and the node security group is shared by every pod (VPC CNI). A Stroom ALB (40-stroom) in the same subnets opens node security group port 8443, which is the proxy's port too, and the proxy NetworkPolicy admits it. Anything else placed in the lb subnets could reach a proxy pod directly with a forged DN header. Options, strongest first: Security Groups for Pods (proxy pods admit only the proxy ALB's security group; needs Nitro types and trunk ENIs); separate lb subnets per application; distinct ports (which don't help against something in the same subnets). Until then, keep the lb subnets for the proxy's and Stroom's load balancers only.

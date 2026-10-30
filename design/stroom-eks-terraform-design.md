@@ -54,7 +54,7 @@ From the 7.14 source (`7.14` branch, CHANGELOG at `v7.14-beta.8`/`beta.9`), stro
   ┌───────▼───────────────────────────────────────────────────┐
   │ ALB (internal) — ACM certificate                          │
   │  /, /api/…  → ui target group (sticky cookie)             │
-  │  *clustercall.rpc, /datafeed* → fixed 403                 │
+  │  /datafeed* → fixed 403                           │
   └───────┬───────────────────────────────────────────────────┘
           │ HTTPS 8443, TargetGroupBinding (operator's ui Service)
   ┌──── same EKS cluster and VPC as the proxy ───────────────────────────────────────┐
@@ -276,7 +276,7 @@ Decision: the proxy checks data against Stroom's receipt rules.
 
 * **ALB (internal)**, a separate one from the proxy's, in the lb subnets, `:443` with an ACM certificate (same `tls_certificate_source` options as the proxy), and `:80` redirecting to 443.
 * Target group: `ip` targets, **HTTPS** to the pods' port 8443 (section 9.1). Health check over HTTP on the admin port 8081, `/stroomAdmin/ping` or a filtered healthcheck (S15) **(open: which)**. Stickiness: application cookie `STROOM_SESSION_ID`. The ALB idle timeout covers the longest UI request (long searches, downloads); no WebSocket support is needed (S13).
-* Rules: `*clustercall.rpc` → 403 (S13); `/stroomAdmin*` is never routed (it's on 8081 anyway); `/datafeed*` → 403 in v1 (data comes through the proxy).
+* Rules (see 18): `/datafeed*`, `/stroom/datafeed*`, `/stroom/noauth/datafeed*` → 403 as an edge filter, and Stroom refuses every post itself; `/stroomAdmin*` is never routed (it's on 8081 anyway). Earlier: `/datafeed*` → 403 in v1 (data comes through the proxy).
 * `TargetGroupBinding` points at the operator's `…-http` Service for the `ui` node set. The operator's own Ingress is disabled (`ingressEnabled: false`, S18).
 * Security group: 443 from `allowed_ingress_cidrs` (users' networks). Optional PrivateLink endpoint service via an NLB, as for the proxy (not in v1).
 * Route 53 alias for `hostname` when `route53_zone_id` is set.
@@ -354,7 +354,7 @@ Each Stroom node has a node name that is unique, readable, and **permanent**: th
 
   Counts can only grow (11.1), so the first cluster starts small and grows by adding nodes of the same size; production node counts and heap come from the current deployment's load **(open)**. Stroom alone needs 80 vCPU (2 × 32 + 16); with the system and proxy nodes the account's On-Demand vCPU quota (32 in the dev account today) must go to about 100.
 * **Single `ui` node**: the UI is unavailable while it restarts (config changes, node replacement) or if its AZ fails; processing and ingest carry on. A second `ui` node is the first thing to add if that matters.
-* **Pods**: one per node (anti-affinity), memory request = limit, CPU request close to the node's allocatable CPU. The heap (`-Xms` = `-Xmx`, via `extraJvmOpts`) is a fixed size rather than a percentage, so the rest of the limit is left for direct memory, LMDB's page cache (which counts against the pod's memory, S10) and the OS. Heaps over 32 GiB lose compressed object pointers, so 64 GiB holds less than twice what 32 GiB does; use Generational ZGC (`-XX:+UseZGC`, the default generational mode in Java 25) or G1, chosen by testing **(open)**.
+* **Pods**: one per node (a hostname topology spread; the anti-affinity is only preferred, see 18), memory request = limit, CPU request close to the node's allocatable CPU. The heap (`-Xms` = `-Xmx`, via `extraJvmOpts`) is a fixed size rather than a percentage, so the rest of the limit is left for direct memory, LMDB's page cache (which counts against the pod's memory, S10) and the OS. Heaps over 32 GiB lose compressed object pointers, so 64 GiB holds less than twice what 32 GiB does; use Generational ZGC (`-XX:+UseZGC`, the default generational mode in Java 25) or G1, chosen by testing **(open)**.
 * The task autoscaler (S17) and per-node task limits use the cores: a 32-vCPU node runs many more processing tasks than the old default limits allow, so the starting task limits are part of sizing.
 * **EBS** `data` PVC per pod: gp3, size and IOPS per node set; one per AZ group so the pod always has a node in its volume's AZ.
 * **Probes**: a long startup probe (migrations hold a lock, S14); readiness on 8081.
@@ -380,7 +380,6 @@ Because ingest is decoupled through SQS, Stroom downtime delays processing but l
 * Pod Identity roles: Stroom's (7.4) and the bootstrap Job's (5.4); nothing else gets them.
 * RDS: private, TLS required (`require_secure_transport`, once operator change 10.2.4 is in), security group limited to the Stroom, operator and init Job pods' subnets.
 * EFS: access point with a fixed uid/gid, mount targets in the private subnets, security group on 2049 from the nodes.
-* `clustercall.rpc` blocked at the ALB (S13).
 * Secrets (DB password, OIDC client secret, the proxy's API key, the TLS keystore) only in Secrets Manager and Kubernetes Secrets, never in Terraform state (ESO and cert-manager).
 
 ## 14. Observability
@@ -403,8 +402,8 @@ allowed_ingress_cidrs   = ["10.0.0.0/8"]
 
 node_sets = {
   # count may only grow (11.1); node set names and node_name_prefix are permanent
-  proc = { count = 2, instance_type = "r6id.8xlarge", memory_limit = "240Gi", heap = "64g", cpu = 30, data_volume_gb = 1000, jobs = "all" }
-  ui   = { count = 1, instance_type = "r6id.4xlarge", memory_limit = "120Gi", heap = "64g", cpu = 14, data_volume_gb = 200,  jobs = "ui" }
+  proc = { count = 2, instance_type = "r6id.8xlarge", memory_limit = "240Gi", heap = "64g", cpu = 29, data_volume_gb = 1000, jobs = "all" }
+  ui   = { count = 1, instance_type = "r6id.4xlarge", memory_limit = "120Gi", heap = "64g", cpu = 13, data_volume_gb = 200,  jobs = "ui" }
 }
 
 stream_volume = { type = "efs" }               # s3_v1 tested later (5.3)
@@ -495,3 +494,22 @@ stroom_downstream = {
 4. **Written** on branch `stroom-eks`, not applied: `modules/stroom-db`, `modules/stroom` and `40-stroom`, with plan tests (17), Stroom 7.14's config check on the rendered `config.yml`, and a strict server-side dry run of the StroomCluster against the operator's CRDs. Not yet: the proxy's trust of the in-cluster CA (16.2.14) for the second proxy apply, and the proxy key renewal CronJob. The plan was: **`modules/stroom-db`** and **`modules/stroom`** / `40-stroom`, and `stroom_downstream` in `30-stroom-proxy`: RDS and its init Job, EFS, ALB, certificate, Pod Identity, ExternalSecrets, `StroomCluster`, the bootstrap Job and key renewal CronJob, `terraform test` suites; first build in the order of 4.3. Done when users sign in through Entra ID, the `proc` set ingests from SQS, the `ui` set serves the UI behind the ALB with sticky sessions, `clustercall.rpc` and `/datafeed` are refused at the ALB, and the proxy fetches receipt rules from Stroom with its API key and keeps receiving while Stroom is stopped.
 5. **Operations**: version upgrade and node replacement runbooks, alarms (14), a dev test round like the proxy's (proxy design 15.1).
 6. **Later**: Keycloak and Cognito presets tested, PrivateLink for the UI (and so receipt rules for proxies outside the cluster), `S3_V1` stream volumes.
+
+## 18. Audit follow-up (2026-10-30)
+
+An audit of the branch (operator, proxy, cluster and platform, Stroom stacks) found bugs that would have broken the first Stroom apply and several hardening gaps. What changed, and the runbooks that came with it:
+
+* **Direct receipt is refused by Stroom itself.** Stroom 7.14 has no `clustercall.rpc` servlet (nodes call each other's REST API pod to pod), so that ALB rule is gone; it also took the rule past the ALB's 5 wildcards. The ALB still returns 403 for `/datafeed*`, `/stroom/datafeed*` and `/stroom/noauth/datafeed*`, but only as an edge filter: it matches the raw path, so percent-encoding gets past it. `config.yml` sets `receive.enabledAuthenticationTypes: [DATA_FEED_KEY]` with `authenticationRequired: true` and no data feed key files, so `ReceiveDataRequestHandler` refuses every sender. S3 ingest doesn't authenticate senders and is unaffected. **Open:** Stroom's `receiptCheckMode` defaults to `FEED_STATUS`, so S3 ingest checks feed status rather than the receipt policy that 8.1 says it re-applies; setting `RECEIPT_POLICY` would match 8.1, once it's known what Stroom does with no receipt rules defined.
+* **Bootstrap Job.** Admitted to 8443 by the NetworkPolicy (it wasn't, so it would have hung). Not created while `stopped` (an upgrade no longer waits on it); it runs again when the cluster starts, and when its settings, scripts or image change, not when only `config.yml` does. Secrets reach curl through stdin or files, never arguments; every curl has timeouts and retries.
+* **Proxy API key renewal.** A daily CronJob with its own role (`ListSecretVersionIds`, `PutSecretValue` on that secret only) writes a new key 35 days before the current one's 365 days are up; the old key stays valid until it expires. The proxy reads the key only at start, so it must restart within those 35 days (a reloader, a scheduled restart, or the runbook); an alarm on the secret's age (over 330 days) catches a missed restart. The CronJob is suspended while Stroom is stopped.
+* **Database password rotation.** Raise `database.app_user_password_version`: Secrets Manager gets a new password, External Secrets delivers it, the init Job sets it with `RETAIN CURRENT PASSWORD`, and a pod annotation rolls the nodes one at a time.
+* **Node certificate renewal.** The certificate lasts a year and cert-manager renews it 90 days before expiry. Terraform copies the Certificate's revision into a pod annotation, so the next apply after a renewal rolls the nodes. Apply at least once in those 90 days; alarm on `notAfter` under 60 days. Without Terraform: `kubectl rollout restart` each node set's StatefulSet.
+* **One pod per node** comes from a hostname topology spread; the anti-affinity is only preferred, because the operator's API key Job copies the first node set's affinity and must fit next to a Stroom pod. The example sizing leaves about 3 vCPUs per node for it and the DaemonSets.
+* **External Secrets isolation** (also the proxy, design F32 there). The controller's own role reads nothing; it may only assume roles named `<cluster>-*`. `40-stroom` creates `<name>-steso-*`, reading only Stroom's secrets (database user, RDS master, OIDC client) and decrypting only through Secrets Manager. cert-manager's and External Secrets' rights are no longer aggregated into the default `edit`/`admin` roles, so only cluster admins create Certificates, SecretStores and ExternalSecrets. IAM role name prefixes add at most 9 characters to a 29-character deployment name, within IAM's 38.
+* **Node groups** (10-infra). Counts change in one apply: the module is given each group's current size and the AWS CLI then resizes it (min = max = desired), as the EKS module ignores desired size. The plan refuses a Stroom group shrinking, moving subnet, or losing an AZ group. `azs` pins the zones; set it to the `availability_zones` output after the first apply, and only ever append. With Stroom, the system nodes must have room for about 24 cluster-service pods (2 × t3.large or m6i.large at least).
+* **Stroom node AMI, version or instance type, one AZ group at a time** (replaces the 12 row): set `az_overrides = { az1 = { ami_release_version = "<new>" } }` (or `instance_types`, or `kubernetes_version` with a matching AMI), apply, wait for that AZ's Stroom pod to be Ready on the new node, repeat for each AZ, then move the value to the set, remove the overrides and apply (no change). Changing the set-level value directly would update every AZ group at once, and the PDB would then fail the update.
+* **In-cluster CA.** The root keeps its key on renewal (`rotationPolicy: Never`), so nothing needs redistributing. Rotating to a new root key: save the current `ca.crt`; set `internal_ca_additional_trusted_certificates` to it in 20-platform and apply (the bundle then holds both); delete the CA Secret so cert-manager reissues the root; roll Stroom and the proxy so they trust both; reissue every leaf (`cmctl renew --all -A`) and roll again; clear the extra certificate, apply and roll.
+* **Operator image.** With the operator charts from this repository, 20-platform requires `stroom_operator.image_repository` and `image_tag` (an image built from the same commit): the released 2.0.0 image ignores `nodeNamePrefix`, which would have named the nodes permanently wrong. Changes to the local charts now upgrade their releases (a checksum of the chart files is in the values).
+* **Operator** (10.2 item 10): NodeSet names are unique DNS labels; each StatefulSet name is at most 52 characters (so pod labels and the `-http` Service fit in 63); `serverAddress.tls` is refused with `serverRef`; the operator won't change objects another controller owns (`NameConflict` events) and now sets owner references on its Ingresses; a removed NodeSet's PDB is deleted; PVCs of nodes removed while stopped are deleted on resume; with `EXTERNAL_IDP` a missing API key no longer holds the nodes. Terraform checks the same name rules at plan time.
+* **Load balancer controller IAM**: `lb_controller_iam_policy = "target_group_binding"` (describe calls plus register/deregister targets) is opt-in until tested on a cluster; the default is still the upstream policy.
+* **Not adopted: VPC CNI strict network policy mode.** It closes the few seconds a new pod's traffic is allowed before its policies apply, but leaves pods without a NetworkPolicy at default-deny, so every namespace (kube-system, cert-manager, external-secrets, amazon-cloudwatch) would first need allow policies; changing it also rolls aws-node. Revisit once they have them.
