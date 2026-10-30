@@ -1,6 +1,6 @@
 # Stroom-Proxy 7.14 on AWS EKS with Terraform: design
 
-Status: design agreed 2026-10-29 and revised the same day after review comments (PrivateLink, authentication, immutable S3, blue/green upgrades, log sender, and the current ALB topology). See section 15. Phases 1 to 4 (`10-infra`, `20-platform`, the `stroom-proxy` chart and `30-stroom-proxy`) are written. The Terraform is not yet applied to AWS; the chart, including the values `30-stroom-proxy` renders, has been validated and boot-tested against the 7.14-beta.8 image. Phases 5 and 6 are not written.
+Status: design agreed 2026-10-29 and revised the same day after review comments (PrivateLink, authentication, immutable S3, blue/green upgrades, log sender, and the current ALB topology). See section 15. Phases 1 to 4 (`10-infra`, `20-platform`, the `stroom-proxy` chart and `30-stroom-proxy`) are written. All three stacks were applied to a dev account on 2026-10-29 and tested, including a blue/green switch, then destroyed (section 15.1); section 15.2 lists what is still untested. Phases 5 and 6 are not written.
 
 ## 1. Goal
 
@@ -607,7 +607,23 @@ First deployment of all three stacks with `envs/dev`: eu-west-2, 3 AZs, `stroom-
 | 4. Drain blue | 318 files in blue's open aggregates; all forwarded to S3 at the 10-minute aggregation boundary (3 objects), queues empty 10 minutes after the switch. |
 | 5. Remove blue | Release, target group and test listeners removed; pods drained and terminated (F28); PVCs deleted after checking they were empty; node groups removed with only DaemonSet pods on them. |
 
-Not yet tested: sender addresses at the ALB (5.4), PrivateLink, tokens (no IdP in dev), the log-sender, canary weights and `proxy-queue-status.sh` (phase 5; `find` on the queue directories stood in for it).
+Not yet tested: see section 15.2.
+
+### 15.2 Remaining tests
+
+The dev round in 15.1 used internet-facing NLBs, no Route 53 zone, an imported certificate, no PrivateLink and no IdP. These parts of the phase 4 done criteria (section 16) and of the design are still untested:
+
+| Area | Untested | How to test |
+|---|---|---|
+| PrivateLink (5.4) | Both endpoint services, connection acceptance, `allowed_principals`, private DNS names and their TXT verification, AZ ID matching, blue/green as seen through PrivateLink. | Producer: `load_balancer_scheme = "internal"`, `privatelink.enabled = true`, `acceptance_required = true`, the consumer in `allowed_principals`. Consumer: a second VPC with no peering, preferably in a second account (also tests principals and AZ names versus IDs), with a test instance reached through SSM and interface endpoints for both services in subnets whose AZ IDs match the NLBs'. Check that a connection waits for acceptance, that an unlisted principal can't create an endpoint, the 15.1 mTLS, DFK and forged-header tests through both endpoints, and a switch under traffic. Private DNS needs a TXT record in public DNS, so a real domain; without one, use the endpoints' own DNS names and `curl --resolve`. |
+| DNS and certificates (5.1) | Route 53 aliases (`route53_zone_id`); `tls_certificate_source` values `acm_private_ca` (the default), `acm_public` and `acm_existing`. | Aliases: a Route 53 private hosted zone (no domain needed); resolve and send to both names from inside the VPC. `acm_public`: a public domain and zone; check DNS validation completes. The same domain serves the PrivateLink TXT records. `acm_existing`: pass the imported test certificate's ARN. `acm_private_ca`: AWS Private CA in general-purpose mode is costly (about $400 a month), so create, test and delete it the same day, or defer until it is going to be used. |
+| Sender addresses (5.4) | Whether the NLBs preserve client IPs to the ALB, and so which ALB security group rules are needed. | ALB access logs (`alb_access_logs_bucket`) and VPC flow logs on the lb subnets; send directly and through PrivateLink and compare source addresses; remove the `allowed_ingress_cidrs` rule from the ALB security group and see whether traffic still flows. |
+| Tokens (section 6) | `TOKEN` authentication; dev had no IdP. | A Cognito user pool with a client-credentials app client, set in `auth.openid`. Valid token 200; wrong audience, expired or tampered token 401; token plus forged DN header 403; pods stay Ready while the IdP is unreachable (F15). |
+| Trust store (5.2) | Adding a CA to `trust/client-ca.pem`; `client_crl_s3_keys`. | Add a second client CA and apply: its certificates are accepted with no pod restarts. Revoke a client certificate with a CRL: its handshake is refused. |
+| Blue/green (phase 5) | Canary weights, `proxy-queue-status.sh`, `latest-proxy-tag.sh`, runbooks; a cycle with a real image change (15.1 used the same image on both colours). | Write phase 5, then run blue → green → blue under traffic on both endpoints with different image tags, using `proxy-queue-status.sh --delete-empty-pvcs` in step 5. |
+| Later | Log-sender (waits for a released image); phase 6 (downstream Stroom with `RECEIPT_POLICY`, WAF, `secret_delivery = "terraform"`). | |
+
+Suggested order: one session with a cheap public domain covering an internal deployment, the private zone, `acm_public`, PrivateLink from a second account, sender addresses, trust store changes and tokens; a second session once phase 5 is written.
 
 ## 16. Implementation phases
 
