@@ -33,8 +33,8 @@ data "aws_iam_policy_document" "pod_identity_trust" {
 ################################################################################
 # AWS Load Balancer Controller
 #
-# Used only for TargetGroupBinding: it registers proxy pod IPs in the ALB
-# target groups that 30-stroom-proxy creates, and injects the pod readiness
+# Used only for TargetGroupBinding: it registers proxy and Stroom pod IPs in the
+# ALB target groups that 30-stroom-proxy and 40-stroom create, and injects the pod readiness
 # gates. Ingress classes and the Service mutator are turned off.
 ################################################################################
 
@@ -199,7 +199,7 @@ resource "aws_eks_addon" "cloudwatch" {
 # External Secrets Operator
 #
 # The controller's own role reads no secrets. Each workload stack creates a
-# role of its own (name prefix "<cluster>-proxy-eso-", "<cluster>-stroom-eso-")
+# role of its own (name prefix "<name>-pxeso-", "<name>-steso-")
 # that may read only that workload's secrets and trusts this role, and points
 # its SecretStore at it; the controller assumes it per SecretStore. So one
 # namespace's SecretStore can't read another workload's secrets. The

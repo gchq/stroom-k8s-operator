@@ -1,14 +1,35 @@
-# Stroom-Proxy on AWS EKS
+# Stroom and Stroom-Proxy on AWS EKS
 
-Terraform that builds an EKS cluster and runs Stroom-Proxy 7.14 on it,
-receiving data over HTTPS on port 443. The design is in
-[`design/proxy-eks-terraform-design.md`](../../design/proxy-eks-terraform-design.md).
+Terraform that builds an EKS cluster and runs Stroom 7.14, Stroom-Proxy 7.14,
+or both on it. The proxy receives data over HTTPS on port 443 and writes it to
+an S3 bucket; Stroom ingests from that bucket and serves its UI and API behind
+an internal ALB. The designs are in
+[`design/proxy-eks-terraform-design.md`](../../design/proxy-eks-terraform-design.md)
+and
+[`design/stroom-eks-terraform-design.md`](../../design/stroom-eks-terraform-design.md).
 
-**Status:** all three stacks are written, with the
-[`stroom-proxy` Helm chart](../../charts/stroom-proxy). Nothing has been
-applied to AWS yet. Two colours can already run side by side (with test
-listeners for the inactive one); canary weights, the queue status script and
-the runbooks come in the next phase.
+The same stacks build three deployment shapes (Stroom design section 4.4):
+
+| Shape | Stacks | Settings |
+|---|---|---|
+| Proxy only | `10-infra`, `20-platform`, `30-stroom-proxy` | `stroom_node_sets = {}` in `10-infra` (the default). |
+| Stroom only | `10-infra`, `20-platform`, `40-stroom` | `proxy_node_colours = {}` in `10-infra`; `40-stroom` ingests from a bucket managed elsewhere (`ingest`). |
+| Both | all four | Both node maps set in `10-infra`; `40-stroom` ingests from the proxy's bucket (`proxy_state`). |
+
+The Stroom parts of `10-infra` and `20-platform` are created only when
+`stroom_node_sets` is set, so a proxy-only cluster is unchanged by them.
+
+**Status:**
+
+* **Stroom-Proxy** (`30-stroom-proxy`, with the
+  [`stroom-proxy` Helm chart](../../charts/stroom-proxy)): applied and tested
+  in a dev account (`envs/dev`). Two colours can run side by side, with test
+  listeners for the inactive one; canary weights, the queue status script and
+  the blue/green runbooks are still to come.
+* **Stroom** (`40-stroom`, the Stroom parts of `10-infra` and `20-platform`,
+  and the operator changes in this repository): written and tested with
+  plans, a local kind cluster and Stroom's own config check only. **Not yet
+  applied to AWS.**
 
 ## Layout
 
@@ -16,8 +37,9 @@ the runbooks come in the next phase.
 terraform/aws-eks/
 ├── modules/
 │   ├── network/          # VPC, subnets, NAT gateways, optional VPC endpoints (or an existing VPC)
-│   ├── eks/              # EKS cluster, system and proxy node groups, add-ons
-│   ├── platform/         # LB controller, gp3 StorageClass, CloudWatch, External Secrets (+ Stroom's)
+│   ├── eks/              # EKS cluster, system, proxy and Stroom node groups, add-ons
+│   ├── platform/         # LB controller, gp3 StorageClass, CloudWatch, External Secrets;
+│   │                     # with Stroom: cert-manager, trust-manager, in-cluster CA, operator
 │   ├── stroom-proxy/     # buckets, ALB, NLBs, PrivateLink, IAM, Kubernetes objects, Helm releases
 │   ├── stroom-db/        # RDS for MySQL 8.4 for Stroom
 │   └── stroom/           # Stroom: EFS, ALB, IAM, secrets, StroomCluster, init and bootstrap Jobs
@@ -27,8 +49,8 @@ terraform/aws-eks/
 │   ├── 30-stroom-proxy/  # the proxy, reading both earlier stacks' outputs
 │   └── 40-stroom/        # Stroom, reading 10, 20 and (with the proxy) 30
 ├── envs/
-│   ├── example/          # backend config and tfvars for one environment
-│   └── dev/              # a small test environment, with an apply and test checklist
+│   ├── example/          # backend config and tfvars for all four stacks
+│   └── dev/              # a small proxy-only test environment, with an apply and test checklist
 └── scripts/
     └── make-test-certs.sh  # throwaway client and server CAs for dev
 ```
@@ -42,9 +64,10 @@ a cluster that already exists.
 * A VPC across 3 AZs with three tiers of subnets:
   * private (nodes and pods);
   * public (NAT gateways, internet-facing NLBs);
-  * lb: a /26 per AZ with no NAT route, used only by the ALB and the internal
-    NLBs. Proxy pods will accept traffic only from these ranges
-    (`lb_subnet_cidrs` output), so nothing else should run in them.
+  * lb: a /26 per AZ with no NAT route, used only by the ALBs and the
+    internal NLBs. The proxy's and Stroom's NetworkPolicies admit load balancer
+    traffic from these ranges (`lb_subnet_cidrs` output), so nothing else
+    should run in them.
 
   NAT gateways are `one_per_az` by default, or `single`. Set `existing_vpc_id`,
   `existing_private_subnet_ids` and `existing_lb_subnet_ids` to use an existing
@@ -56,7 +79,7 @@ a cluster that already exists.
     (`0.0.0.0/0` is rejected);
   * Kubernetes Secrets encrypted with a KMS key;
   * optional control plane logging (`cluster_log_types`).
-* Two managed node groups (AL2023, IMDSv2 required with hop limit 1, encrypted
+* Managed node groups (AL2023, IMDSv2 required with hop limit 1, encrypted
   gp3 root volumes):
   * `system`: untainted, labelled `workload=system`, for CoreDNS, controllers
     and operators. Default 2 × `t3.medium`.
@@ -91,7 +114,7 @@ a cluster that already exists.
     own their index shards, so only ever raise `node_count`.
 * EKS add-ons: `vpc-cni` (network policy enforcement on), `coredns`,
   `kube-proxy`, `eks-pod-identity-agent`, and `aws-ebs-csi-driver` with a Pod
-  Identity role and its node DaemonSet tolerating the proxy taint. With Stroom
+  Identity role and its node DaemonSet tolerating all taints. With Stroom
   node sets, also `aws-efs-csi-driver` (Stroom's shared stream volume) with a
   Pod Identity role; its node DaemonSet tolerates all taints by default.
 
@@ -99,29 +122,34 @@ At least one of `proxy_node_colours` and `stroom_node_sets` must be set.
 
 ## What `20-platform` creates
 
-Everything runs on the system nodes.
+The cluster services both workloads share, and Stroom's prerequisites. Everything
+runs on the system nodes.
 
 * **AWS Load Balancer Controller** (Helm chart 3.6.2, Pod Identity role with
   the controller's published IAM policy). Used only for `TargetGroupBinding`,
-  which registers proxy pods in the ALB target groups that `30-stroom-proxy`
-  creates, and for injecting pod readiness gates. Its ingress class and Service
-  mutator are turned off. Its pod webhook is set to fail closed, so a proxy
-  pod is never created without its readiness gate; two replicas with a
-  PodDisruptionBudget keep the webhook available.
+  which registers proxy and Stroom pods in the ALB target groups that
+  `30-stroom-proxy` and `40-stroom` create, and for injecting pod readiness
+  gates. Its ingress class and Service mutator are turned off. Its pod webhook
+  is set to fail closed, so a pod is never created without its readiness gate;
+  two replicas with a PodDisruptionBudget keep the webhook available.
 * **gp3 StorageClass**, the cluster default: encrypted, `WaitForFirstConsumer`
   (so each volume is created in its pod's AZ), expandable, with `gp3_iops` and
   `gp3_throughput`.
 * **CloudWatch Observability add-on** (Container Insights metrics, Fluent Bit
   container logs) with a Pod Identity role. Its pods tolerate all taints (add-on
-  1.7.0 and later, enforced), so logs are collected from the proxy nodes too. Terraform creates its four log
+  1.7.0 and later, enforced), so logs are collected from the proxy and Stroom
+  nodes too. Terraform creates its four log
   groups (`/aws/containerinsights/<cluster>/{application,dataplane,host,performance}`)
   first, with `log_retention_days`; otherwise logs would be kept forever.
 * **External Secrets Operator** (Helm chart 2.14.0, with its CRDs) and a Pod
-  Identity role that can read only Secrets Manager secrets named
-  `secrets_name_prefix*` (default `stroom-proxy/<name>/`). The `SecretStore`
-  that uses it is created by `30-stroom-proxy`, in the proxy namespace:
-  Terraform can't plan a custom resource in the same apply that installs its
-  CRD.
+  Identity role that reads no secrets itself: it may only assume roles named
+  `<name>-*`. Each workload stack creates its own role (`<name>-pxeso-*` for
+  the proxy, `<name>-steso-*` for Stroom) that reads only that workload's own
+  secrets, and a `SecretStore` in its namespace that assumes it. Secrets you
+  create yourself (client secrets, the proxy's downstream key) go under
+  `secrets_name_prefix`, default `stroom-proxy/<name>/` for both workloads.
+  Those stacks create the SecretStores because Terraform can't plan a custom
+  resource in the same apply that installs its CRD.
 
 The controllers are given the region and VPC ID explicitly, because the IMDS
 hop limit of 1 stops pods reading them from instance metadata.
@@ -151,7 +179,8 @@ A proxy-only cluster gets none of these.
 
 ## What `30-stroom-proxy` creates
 
-The proxy and everything in front of and behind it (design sections 5 to 9).
+Stroom-Proxy and everything in front of and behind it (proxy design sections 5
+to 9). Leave this stack out for a Stroom-only cluster.
 
 * **Two endpoints**, both HTTPS on 443:
   * `mtls_hostname`: an internal NLB forwarding to the ALB's mTLS listener
@@ -199,7 +228,9 @@ image without a digest, and more.
 Stroom on the cluster's Stroom node groups, deployed by the Stroom operator
 (design [`stroom-eks-terraform-design.md`](../../design/stroom-eks-terraform-design.md)).
 It needs `10-infra` with `stroom_node_sets` and `20-platform` applied after
-it. **Written and tested with plans only; not yet applied.**
+it. With the proxy in the cluster, it ingests from the proxy's data bucket;
+without, from the bucket named in `ingest`. **Written and tested with plans
+only; not yet applied.**
 
 * **Database** (`modules/stroom-db`): RDS for MySQL 8.4, Multi-AZ, encrypted
   with its own KMS key, private, TLS required, automated backups, a final
@@ -248,11 +279,8 @@ node set without node groups in `10-infra` or with more pods than nodes, a
 cluster without Stroom's platform components, and a Stroom-only cluster
 without an `ingest` bucket.
 
-With the proxy, the first build applies `30-stroom-proxy` twice (design 4.3):
-after `40-stroom`, set the proxy's `downstream` from this stack's
-`proxy_downstream` output and `receipt.check_mode = "RECEIPT_POLICY"`. The
-proxy must also trust the in-cluster CA, which needs a proxy chart change (not
-done yet).
+With the proxy, the first build applies `30-stroom-proxy` twice (see
+[Usage](#40-stroom)).
 
 ## Prerequisites
 
@@ -261,17 +289,25 @@ done yet).
   KMS and EC2 resources.
 * An S3 bucket for Terraform state (versioned, encrypted, access-restricted).
   State locking uses S3 itself (`use_lockfile`), so no DynamoDB table is needed.
-* The AWS CLI: `20-platform` and `30-stroom-proxy` use `aws eks get-token`
-  to authenticate to the cluster. `30-stroom-proxy` also needs `python3` at
-  plan time if `data_bucket_name` names an existing bucket (to check its
-  Object Lock settings).
+* The AWS CLI v2: `20-platform`, `30-stroom-proxy` and `40-stroom` use
+  `aws eks get-token` to authenticate to the cluster, and `10-infra` uses
+  `aws eks update-nodegroup-config` to resize node groups. `30-stroom-proxy`
+  also needs `python3` at plan time if `data_bucket_name` names an existing
+  bucket (to check its Object Lock settings).
 * `kubectl`, to check the cluster afterwards.
+* For Stroom: an app registration in the identity provider (Entra ID,
+  Keycloak or Cognito), with its client secret in Secrets Manager under
+  `20-platform`'s `secrets_name_prefix`, and the Stroom operator's image (until
+  the operator changes here are released, a build of this branch, for example
+  in ECR).
 
 ## Usage
 
-Copy `envs/example` to `envs/<env>`, then edit the backend files (state bucket
-and key) and the tfvars. Apply the stacks in order. For a first test
-deployment, `envs/dev/README.md` has the steps and a test checklist.
+Copy `envs/example` to `envs/<env>`, drop the files for any stack your shape
+leaves out, then edit the backend files (state bucket and key) and the tfvars.
+Apply the stacks in order: `10-infra`, `20-platform`, then `30-stroom-proxy`
+and/or `40-stroom`. For a first proxy test deployment, `envs/dev/README.md`
+has the steps and a test checklist.
 
 ### 10-infra
 
@@ -290,8 +326,9 @@ kubectl get nodes -L topology.kubernetes.io/zone,workload
 kubectl get pods -n kube-system -o wide
 ```
 
-You should see the system nodes and one proxy node per AZ for each colour,
-with CoreDNS and the EBS CSI controller running on the system nodes.
+You should see the system nodes, one proxy node per AZ for each colour and
+each Stroom node set's nodes (`kubectl get nodes -L stroom/node-set`), with
+CoreDNS and the EBS CSI controller running on the system nodes.
 
 If `api_allowed_cidrs` is empty, the Kubernetes API is reachable only from
 inside the VPC (for example over a VPN, Direct Connect or a bastion). The same
@@ -317,8 +354,16 @@ Then:
 ```sh
 kubectl get deploy -n kube-system aws-load-balancer-controller
 kubectl get pods -n external-secrets
-kubectl get pods -n amazon-cloudwatch -o wide   # fluent-bit on every node, proxy nodes included
+kubectl get pods -n amazon-cloudwatch -o wide   # fluent-bit on every node, proxy and Stroom nodes included
 kubectl get storageclass                        # gp3 (default)
+```
+
+With Stroom node sets, also:
+
+```sh
+kubectl get pods -n cert-manager                # cert-manager, trust-manager
+kubectl get clusterissuer stroom-internal-ca    # Ready
+kubectl get deploy -A | grep -E 'metrics-server|stroom-operator'
 ```
 
 ### 30-stroom-proxy
@@ -348,6 +393,44 @@ kubectl -n stroom-proxy get pods -o wide
 curl --cert client.pem --key client.key https://<mtls_hostname>/datafeed -H 'Feed: TEST' --data-binary @file
 curl -H "Authorization: Bearer <token>" https://<hostname>/datafeed -H 'Feed: TEST' --data-binary @file
 ```
+
+### 40-stroom
+
+Not yet applied to AWS: expect to find problems on the first real apply.
+
+Register the redirect URI `https://<hostname>/api/auth/flow/v1/signin-oidc`
+with the identity provider, and put its client secret in Secrets Manager under
+`20-platform`'s `secrets_name_prefix`. Then set, in `40-stroom.tfvars`:
+`infra_state`, `platform_state`, and `proxy_state` (with the proxy) or
+`ingest` (without); `node_name_prefix`, `stroom_image` and `node_sets`
+(matching `10-infra`'s `stroom_node_sets`); `database`; `idp`, including the
+first administrator's subject; `raw_data_retention_days`; and the host name,
+certificate source and `allowed_ingress_cidrs`.
+
+```sh
+cd stacks/40-stroom
+terraform init -backend-config=../../envs/<env>/backend-40-stroom.hcl
+terraform plan  -var-file=../../envs/<env>/40-stroom.tfvars -out=40-stroom.tfplan
+terraform apply 40-stroom.tfplan
+```
+
+The first apply takes longest: RDS, then the database init Job, then the
+nodes' first start (database migrations; the apply waits up to an hour), then
+the bootstrap Job (first administrator, the proxy's user and API key, the S3
+volume and the S3 event poll job). If `route53_zone_id` isn't set, point the
+host name at the ALB (`alb_dns_name` output).
+
+```sh
+kubectl -n stroom get stroomcluster,pods -o wide
+kubectl -n stroom get jobs                     # database init and bootstrap: Complete
+```
+
+Then sign in at the `url` output as the first administrator.
+
+With the proxy, apply `30-stroom-proxy` again (design 4.3): set its
+`downstream` from this stack's `proxy_downstream` output and
+`receipt.check_mode = "RECEIPT_POLICY"`. The proxy must also trust the
+in-cluster CA, which needs a proxy chart change (not done yet).
 
 ## Main inputs (10-infra)
 
@@ -403,13 +486,34 @@ See `stacks/20-platform/variables.tf` for the full list.
 
 See `stacks/30-stroom-proxy/variables.tf` and `modules/stroom-proxy/variables.tf`.
 
+## Main inputs (40-stroom)
+
+| Variable | Default | Notes |
+|---|---|---|
+| `infra_state`, `platform_state` | (required) | Where the earlier stacks' state is. |
+| `proxy_state`, `ingest` | `null`, `{}` | With the proxy, its state (Stroom ingests from its bucket). Without, `ingest`: the bucket, its queue and DLQ, KMS key and expiry, managed elsewhere (design 4.4). |
+| `node_name_prefix` | (required) | Node names are `<prefix>-<node set>-<n>`. Permanent, as are node set names. |
+| `stroom_image` | (required) | `{ repository, tag, digest }`; the digest is recommended. |
+| `node_sets` | (required) | Keyed as `10-infra`'s `stroom_node_sets`, one pod per node. Per set: `count`, `role` (`Processing`, `Frontend`, ...), `cpu`, `memory_gib`, `heap_gib`, `data_volume_gb` (gp3, index shards), `nvme` sizes. Counts only go up. |
+| `stopped` | `false` | Stops every node, keeping the counts, for a version upgrade (design section 12). |
+| `database` | Multi-AZ `db.r6g.large`, 200 GB | RDS for MySQL 8.4. `app_user_password_version` rotates the Stroom user's password. |
+| `stream_volume` | EFS, elastic, backed up | The shared stream volume. |
+| `idp` | (required) | `type` (`entra`, `keycloak`, `cognito`), `tenant_id` or `discovery_url`, `client_id`, `client_secret_name`, `first_admin`. |
+| `raw_data_retention_days` | (required) | Must be less than the data bucket's expiry. |
+| `proxy_api_key_secret_name` | `stroom-proxy-api-key` | Where the bootstrap Job writes the proxy's API key. With the proxy only. |
+| `hostname`, `allowed_ingress_cidrs` | (required) | The UI and API's host name, and who may reach its ALB. |
+| `tls_certificate_source` | `acm_private_ca` | As for the proxy. |
+
+See `stacks/40-stroom/variables.tf`, `modules/stroom/variables.tf` and
+`modules/stroom-db/variables.tf`.
+
 ## Tests
 
 The stacks have plan-only tests that use mocked providers, so they need no
 credentials or cluster:
 
 ```sh
-cd stacks/10-infra    # or stacks/20-platform, stacks/30-stroom-proxy
+cd stacks/10-infra    # or 20-platform, 30-stroom-proxy, 40-stroom
 terraform init -backend=false
 terraform test
 ```
@@ -483,10 +587,17 @@ through the proxy image's config check.
   at a time. They run only stateless cluster services.
 * **Proxy nodes** are never upgraded in place. Add a second colour to
   `proxy_node_colours` with the new `kubernetes_version`, AMI or instance type,
-  apply, move the proxy to it (blue/green, in `30-stroom-proxy` once it
-  exists), and remove the old colour once its proxies have drained. Proxy nodes
-  may lag the control plane by up to three minor versions, so they can catch up
-  at the next blue/green. See section 9 of the design.
+  apply, move the proxy to it (blue/green, `active_colour` in
+  `30-stroom-proxy`), and remove the old colour once its proxies have drained.
+  Proxy nodes may lag the control plane by up to three minor versions, so they
+  can catch up at the next blue/green. See section 9 of the proxy design.
+* **Stroom nodes** keep their index shards, so they are replaced one AZ group
+  at a time with `stroom_node_sets.<set>.az_overrides`, each Stroom pod moving
+  to the new node in its AZ with its EBS volume (Stroom design section 18).
+  They may also lag the control plane by up to three minor versions.
+* **Stroom version**: set `stopped = true` in `40-stroom` and apply, change
+  `stroom_image`, then set `stopped = false` and apply (Stroom design section
+  12).
 
 ### After the 2026-10-30 audit
 
@@ -521,8 +632,9 @@ through the proxy image's config check.
 
 ## Destroy
 
-Destroy the stacks in reverse order: `40-stroom`, then `30-stroom-proxy`,
-then `20-platform`, then `10-infra`, which removes the cluster and the VPC.
+Destroy the stacks in reverse order, skipping any your shape doesn't have:
+`40-stroom`, then `30-stroom-proxy`, then `20-platform`, then `10-infra`,
+which removes the cluster and the VPC.
 `40-stroom` must go before `20-platform`: the StroomCluster has a finalizer
 that only the operator (installed by `20-platform`) removes, after draining
 the nodes, so destroying the operator first leaves `40-stroom`'s destroy

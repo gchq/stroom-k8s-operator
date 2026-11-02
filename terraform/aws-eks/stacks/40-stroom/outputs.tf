@@ -23,7 +23,7 @@ output "stroom_role_arn" {
   value       = module.stroom.stroom_role_arn
 }
 
-# For the second 30-stroom-proxy apply (design 4.3): stroom_downstream
+# For the second 30-stroom-proxy apply (design 4.3): its downstream
 output "proxy_downstream" {
   description = "What the proxy needs for receipt rules from Stroom: the Frontend Service, the API key's secret and the in-cluster CA's ConfigMap. null without a proxy."
   value = var.proxy_state == null ? null : {
