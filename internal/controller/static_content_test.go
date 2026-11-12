@@ -206,7 +206,7 @@ var _ = Describe("Node lifecycle scripts", func() {
 			Expect(err).ToNot(HaveOccurred(), output)
 
 			Expect(readFile("requests")).ToNot(ContainSubstring("fetchClientCredsToken"))
-			Expect(readFile("arguments")).To(ContainSubstring("Authorization:Bearer header.eyJleHAiOjk5OTk5OTk5OTl9.signature"))
+			Expect(readFile("arguments")).To(ContainSubstring("Authorization: Bearer header.eyJleHAiOjk5OTk5OTk5OTl9.signature"))
 		})
 
 		It("should send the client credentials in the request body, not as an argument", func() {

@@ -64,7 +64,7 @@ var StaticFiles embed.FS
 //+kubebuilder:rbac:groups=stroom.gchq.github.io,resources=databaseservers,verbs=get;list;watch;update
 //+kubebuilder:rbac:groups=stroom.gchq.github.io,resources=databaseservers/finalizers,verbs=update
 //+kubebuilder:rbac:groups=core,resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=core,resources=secrets,verbs=get;create
+//+kubebuilder:rbac:groups=core,resources=secrets,verbs=get;create;patch
 //+kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
@@ -687,6 +687,5 @@ func (r *StroomClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&stroomv1.StroomCluster{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&batchv1.Job{}).
-		Owns(&corev1.Secret{}).
 		Complete(r)
 }

@@ -35,6 +35,7 @@ rules:
   verbs:
   - create
   - get
+  - patch
 - apiGroups:
   - apps
   resources:
