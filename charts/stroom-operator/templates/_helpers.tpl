@@ -27,6 +27,14 @@ Create chart name and version as used by the chart label.
 {{- end }}
 
 {{/*
+Operator image: the registry value, which is a full image repository, or else image.repository.
+*/}}
+{{- define "stroom-operator.image" -}}
+{{- $repository := .Values.registry | default .Values.image.repository }}
+{{- printf "%s:%s" $repository (.Values.image.tag | default .Chart.AppVersion) }}
+{{- end }}
+
+{{/*
 Common labels
 */}}
 {{- define "stroom-operator.labels" -}}
