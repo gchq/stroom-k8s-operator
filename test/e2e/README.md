@@ -44,15 +44,16 @@ go test ./test/e2e/ -v -ginkgo.v -ginkgo.focus "external database"   # rerun one
 
 | Group | Suite | Namespace | What it covers |
 |---|---|---|---|
-| core | Operator upgrade | `stroom-e2e-upgrade` | Running Stroom with the previous operator release, then upgrading the operator with Helm |
+| core | Operator upgrade | `stroom-e2e-upgrade` | Running Stroom with the previous operator release, then upgrading the operator with Helm, which records the Stroom version the nodes run without migrating the database |
 | core | DatabaseServer | `stroom-e2e-db` | MySQL with the `mysql/mysql-server` and official `mysql` images; root password handling; DatabaseBackup |
 | core | External identity provider, operator-managed database | `stroom-e2e-external` | Keycloak, a Stroom user for the operator with only the Manage Nodes, Manage Jobs and Manage Tasks permissions, node start, health check filters, node drain, scaling the node set up and down, an identity provider outage, and deleting the cluster while a node has a processing task |
 | core | External identity provider, external database | `stroom-e2e-external-db` | As above, except scaling and the outage, with a MySQL server not managed by the operator (`external-mysql.yaml`), connected to by address |
-| core | Bootstrap lock and Stroom upgrade | `stroom-e2e-lock` | Two or more nodes waiting on the Stroom bootstrap lock, which the test holds, within the startup probe's lock wait allowance, then a rolling upgrade of Stroom |
+| core | Bootstrap lock and Stroom upgrade | `stroom-e2e-lock` | The database migration Job waiting on the Stroom bootstrap lock, which the test holds, before two or more nodes start without restarting; then a Stroom upgrade, migrating the database in a Job before rolling the nodes |
 | core | Internal identity provider | `stroom-e2e-internal` | Stroom's bundled configuration with its internal identity provider, without and with HTTPS, then changed to run as the stroom user; the operator's API key, with which the node becomes ready |
 | extended | Node roles, HTTPS, Ingress, log sender, autoscaling | `stroom-e2e-features` | Processing and frontend node sets and their managed jobs, the key store init container, ingress-nginx, the log sender sidecar, and StroomTaskAutoscaler with metrics-server |
 | extended | Volume claim delete policies | `stroom-e2e-volumes` | Each `volumeClaimDeletePolicy`, on scale-down and cluster deletion |
 | extended | Operator restarts | `stroom-e2e-restart` | Restarting the operator while idle, during a scale-up, and during cluster deletion |
+| extended | Offline Stroom upgrade | `stroom-e2e-offline` | A Stroom upgrade with `upgradeStrategy: Offline`: every node drained and stopped before the database migration Job runs, then the nodes started on the new version |
 | extended | Sample deployment with an operator-managed database | `stroom-e2e-samples` | `samples/operator-database`, applied with kustomize: Stroom starting within the default startup probe, the Ingress, a backup, and the NetworkPolicies refusing other connections |
 | extended | Sample deployment with an external database | `stroom-e2e-samples-external` | `samples/external-database`, applied with kustomize, against a MySQL server not managed by the operator |
 

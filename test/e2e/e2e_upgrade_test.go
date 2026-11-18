@@ -85,10 +85,26 @@ func operatorUpgradeSpecs() {
 			"jsonpath={.spec.nodeSets[0].startupProbeTimings.failureThreshold} {.spec.nodeSets[0].livenessProbeTimings.failureThreshold}")
 		Expect(timings).To(Equal(values["STARTUP_FAILURE_THRESHOLD"] + " 10"))
 	})
+
+	It("should record the Stroom version the nodes already run, rather than migrating", func() {
+		image := mustKubectl("get", "stroomcluster", "e2e", "-n", namespace, "-o", "jsonpath={.status.migratedImage}")
+		Expect(image).To(Equal("gchq/stroom:" + stroomTag))
+		status, reason, _ := migrationCondition(namespace)
+		Expect(status + " " + reason).To(Equal("True Succeeded"))
+
+		logs := mustKubectl("logs", "-n", operatorNamespace, operatorDeployment)
+		Expect(logs).To(ContainSubstring("Recorded the image the nodes already run as the migrated image"))
+		for _, line := range strings.Split(logs, "\n") {
+			if strings.Contains(line, namespace) {
+				Expect(line).ToNot(ContainSubstring("Creating database migration Job"))
+			}
+		}
+	})
 }
 
-// bootstrapLockSpecs tests nodes waiting on the Stroom bootstrap lock, which a node holds while it upgrades the
-// database, then upgrades Stroom. The lock is held by the test for a fixed time, so the wait is predictable.
+// bootstrapLockSpecs tests the database migration waiting on the Stroom bootstrap lock, which Stroom holds while it
+// upgrades the database, then upgrades Stroom. The lock is held by the test for a fixed time, so the wait is
+// predictable. The migration Job, rather than the nodes, waits on it, so the nodes start once the database is ready.
 func bootstrapLockSpecs() {
 	const (
 		namespace = "stroom-e2e-lock"
@@ -115,40 +131,63 @@ func bootstrapLockSpecs() {
 		deployKeycloakAndDatabase(operatorDatabase, namespace, values)
 	})
 
-	It("should let nodes wait on the bootstrap lock without restarting them", func() {
-		By("making the nodes upgrade the database, while the lock is held")
+	It("should migrate the database once the bootstrap lock is free, then start the nodes without restarting them", func() {
+		By("making Stroom upgrade the database, while the lock is held")
+		// The lock is released no earlier than this. Truncated to the second, as the condition's time is
+		lockReleased := time.Now().UTC().Add(lockHoldSeconds * time.Second).Format(time.RFC3339)
 		holdBootstrapLock(namespace, lockHoldSeconds)
 		applyTestData(namespace, "stroom-cluster.yaml", values)
 
+		Eventually(func() string {
+			output, _ := kubectl("get", "stroomcluster", "e2e", "-n", namespace, "-o", "jsonpath={.status.migratedImage}")
+			return output
+		}, stroomStartTimeout, 5*time.Second).Should(Equal("gchq/stroom:" + previousStroomTag))
+		status, reason, migrated := migrationCondition(namespace)
+		Expect(status + " " + reason).To(Equal("True Succeeded"))
+		Expect(migrated >= lockReleased).To(BeTrue(), "the migration (%v) should have waited for the lock to be released (%v)", migrated, lockReleased)
+
 		for _, pod := range pods {
 			waitForCondition(namespace, "pod/"+pod, "condition=Ready", stroomStartTimeout)
+			nodeStarted := mustKubectl("get", "pod", "-n", namespace, pod, "-o", "jsonpath={.metadata.creationTimestamp}")
+			Expect(nodeStarted >= migrated).To(BeTrue(), "%v (%v) should have started after the migration finished (%v)", pod, nodeStarted, migrated)
+			// The allowance still applies, for a node that waits on the lock for another reason
 			threshold := mustKubectl("get", "pod", "-n", namespace, pod, "-o",
 				`jsonpath={.spec.containers[?(@.name=="stroom-node")].startupProbe.failureThreshold}`)
 			Expect(threshold).To(Equal(expectedFailureThreshold), pod)
 			Expect(podRestartCount(namespace, pod)).To(Equal(0), "%v should not have been restarted", pod)
-
-			// zcat exits with an error for a file being written as it's read, so only its output is checked
-			output, err := execInPod(namespace, pod, "stroom-node", "zcat -f /stroom/logs/app/app* 2> /dev/null; true")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(output).To(ContainSubstring("Waiting to acquire bootstrap lock"), "%v should have waited on the lock", pod)
 		}
 	})
 
-	It("should upgrade Stroom one node at a time, draining each node", func() {
+	It("should migrate the database in a Job, then upgrade Stroom one node at a time, draining each node", func() {
+		target := "gchq/stroom:" + stroomTag
 		drains := map[string]int{}
 		for _, pod := range pods {
 			drains[pod] = drainCount(namespace, pod)
 		}
 
+		// RFC 3339 timestamps in UTC sort as strings. This one is truncated to the second, so it's no later than the patch
+		patched := time.Now().UTC().Format(time.RFC3339)
 		mustKubectl("patch", "stroomcluster", "e2e", "-n", namespace, "--type=json",
 			"-p", fmt.Sprintf(`[{"op": "replace", "path": "/spec/image/tag", "value": %q}]`, stroomTag))
-		mustKubectl("rollout", "status", statefulSet, "-n", namespace, "--timeout=30m")
 
+		By("migrating the database before any node changes version")
+		Eventually(func() string {
+			return mustKubectl("get", "stroomcluster", "e2e", "-n", namespace, "-o", "jsonpath={.status.migratedImage}")
+		}, stroomStartTimeout, 5*time.Second).Should(Equal(target))
+		status, reason, migrated := migrationCondition(namespace)
+		Expect(status + " " + reason).To(Equal("True Succeeded"))
+		Expect(migrated >= patched).To(BeTrue(), "the migration (%v) should have finished after the upgrade began (%v)", migrated, patched)
+		Expect(mustKubectl("get", "jobs", "-n", namespace, "-o", "name")).ToNot(ContainSubstring("-cli-migrate-"),
+			"the migration Job should be removed once it succeeds")
+
+		mustKubectl("rollout", "status", statefulSet, "-n", namespace, "--timeout=30m")
 		for _, pod := range pods {
 			waitForCondition(namespace, "pod/"+pod, "condition=Ready", stroomStartTimeout)
 			image := mustKubectl("get", "pod", pod, "-n", namespace, "-o",
 				`jsonpath={.spec.containers[?(@.name=="stroom-node")].image}`)
-			Expect(image).To(Equal("gchq/stroom:" + stroomTag))
+			Expect(image).To(Equal(target))
+			nodeStarted := mustKubectl("get", "pod", "-n", namespace, pod, "-o", "jsonpath={.metadata.creationTimestamp}")
+			Expect(nodeStarted >= migrated).To(BeTrue(), "%v (%v) should have started after the migration finished (%v)", pod, nodeStarted, migrated)
 			Expect(drainCount(namespace, pod)).To(BeNumerically(">", drains[pod]), "%v should have drained before upgrading", pod)
 		}
 		Expect(mysqlAsRoot(namespace, "e2e", rootPassword(namespace, "e2e"), "SELECT build_version FROM stroom.build_version")).
@@ -156,8 +195,97 @@ func bootstrapLockSpecs() {
 	})
 }
 
-// holdBootstrapLock makes Stroom nodes upgrade the database when they start, by changing the build version recorded
-// in it, then holds the lock they need to do so for a number of seconds
+// migrationCondition returns the status, reason and last transition time of the e2e StroomCluster's DatabaseMigrated
+// condition
+func migrationCondition(namespace string) (string, string, string) {
+	output := mustKubectl("get", "stroomcluster", "e2e", "-n", namespace, "-o", `jsonpath=`+
+		`{.status.conditions[?(@.type=="DatabaseMigrated")].status} `+
+		`{.status.conditions[?(@.type=="DatabaseMigrated")].reason} `+
+		`{.status.conditions[?(@.type=="DatabaseMigrated")].lastTransitionTime}`)
+	fields := strings.Fields(output)
+	ExpectWithOffset(1, fields).To(HaveLen(3), "the DatabaseMigrated condition: %q", output)
+	return fields[0], fields[1], fields[2]
+}
+
+// offlineUpgradeSpecs tests upgrading Stroom with the Offline upgrade strategy: every node is drained and stopped
+// before the database is migrated, then the nodes start on the new version
+func offlineUpgradeSpecs() {
+	const namespace = "stroom-e2e-offline"
+	pods := stroomPodNames("e2e", "node", stroomNodeCount())
+	values := keycloakClusterValues(operatorDatabase, namespace)
+	values["PROVISIONING_STROOM_TAG"] = previousStroomTag
+	values["STROOM_TAG"] = previousStroomTag
+	values["UPGRADE_STRATEGY"] = "upgradeStrategy: Offline"
+
+	BeforeAll(func() {
+		deployKeycloakAndDatabase(operatorDatabase, namespace, values)
+		applyTestData(namespace, "stroom-cluster.yaml", values)
+	})
+
+	It("should run Stroom", func() {
+		for _, pod := range pods {
+			waitForCondition(namespace, "pod/"+pod, "condition=Ready", stroomStartTimeout)
+		}
+	})
+
+	It("should stop every node, draining each, before migrating the database, then start them on the new version", func() {
+		target := "gchq/stroom:" + stroomTag
+		drains := map[string]int{}
+		for _, pod := range pods {
+			drains[pod] = drainCount(namespace, pod)
+		}
+
+		patched := time.Now().UTC().Format(time.RFC3339)
+		mustKubectl("patch", "stroomcluster", "e2e", "-n", namespace, "--type=json",
+			"-p", fmt.Sprintf(`[{"op": "replace", "path": "/spec/image/tag", "value": %q}]`, stroomTag))
+
+		By("migrating the database with no node running")
+		// Each check reads the migration Job, then the node pods. A node created before the Job, and still there
+		// after it was created, ran during the migration. Starting Stroom takes far longer than a check, so the Job
+		// is seen.
+		var sawMigration bool
+		var nodesDuringMigration []string
+		Eventually(func() string {
+			jobs, _ := kubectl("get", "jobs", "-n", namespace, "-o",
+				`jsonpath={range .items[*]}{.metadata.name} {.metadata.creationTimestamp}{"\n"}{end}`)
+			for _, line := range strings.Split(jobs, "\n") {
+				fields := strings.Fields(line)
+				if len(fields) != 2 || !strings.Contains(fields[0], "-cli-migrate-") {
+					continue
+				}
+				sawMigration = true
+				nodes, _ := kubectl("get", "pods", "-n", namespace, "-l", "stroom/cluster=e2e,stroom/nodeSet", "-o",
+					`jsonpath={range .items[*]}{.metadata.name} {.metadata.creationTimestamp}{"\n"}{end}`)
+				for _, node := range strings.Split(nodes, "\n") {
+					if nodeFields := strings.Fields(node); len(nodeFields) == 2 && nodeFields[1] < fields[1] {
+						nodesDuringMigration = append(nodesDuringMigration, nodeFields[0])
+					}
+				}
+			}
+			output, _ := kubectl("get", "stroomcluster", "e2e", "-n", namespace, "-o", "jsonpath={.status.migratedImage}")
+			return output
+		}, stroomStartTimeout, 2*time.Second).Should(Equal(target))
+		Expect(sawMigration).To(BeTrue(), "the migration Job should have been seen")
+		Expect(nodesDuringMigration).To(BeEmpty(), "no node should run while the database is migrated")
+
+		status, reason, migrated := migrationCondition(namespace)
+		Expect(status + " " + reason).To(Equal("True Succeeded"))
+		Expect(migrated >= patched).To(BeTrue(), "the migration (%v) should have finished after the upgrade began (%v)", migrated, patched)
+
+		mustKubectl("rollout", "status", statefulSet, "-n", namespace, "--timeout=30m")
+		for _, pod := range pods {
+			waitForCondition(namespace, "pod/"+pod, "condition=Ready", stroomStartTimeout)
+			image := mustKubectl("get", "pod", pod, "-n", namespace, "-o",
+				`jsonpath={.spec.containers[?(@.name=="stroom-node")].image}`)
+			Expect(image).To(Equal(target))
+			// The pre-stop log is kept on the node's volume, which is kept while the nodes are stopped
+			Expect(drainCount(namespace, pod)).To(BeNumerically(">", drains[pod]), "%v should have drained before stopping", pod)
+		}
+	})
+}
+
+// holdBootstrapLock makes Stroom upgrade the database when it next starts, by changing the build version recorded in
+// it, then holds the lock Stroom needs to do so for a number of seconds
 func holdBootstrapLock(namespace string, seconds int) {
 	password := rootPassword(namespace, "e2e")
 	mysqlAsRoot(namespace, "e2e", password, "UPDATE stroom.build_version SET build_version = 'e2e-forced-upgrade'")
