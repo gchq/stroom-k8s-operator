@@ -113,9 +113,10 @@ responds and the script has enabled the node and its jobs. Its log is `/stroom/l
 node, and any API errors are in `/stroom/logs/k8s/api.log`.
 
 Kubernetes restarts the container if the probe hasn't succeeded within about
-`initialDelaySeconds + failureThreshold × periodSeconds`. The time a node needs depends mainly on whether it has to
-wait for a database migration: when Stroom starts, one node takes Stroom's database bootstrap lock and creates or
-migrates the schema, and the other nodes wait for it.
+`initialDelaySeconds + failureThreshold × periodSeconds`. The operator creates or migrates the database schema in a
+Job before any node starts on a new version (see [Upgrading Stroom](../operations/upgrading.md#upgrading-stroom)), so
+a node doesn't normally need time for a migration. A node that finds the schema out of date still takes Stroom's
+database bootstrap lock and migrates it, and other nodes starting then wait for the lock.
 
 ### Parallel pod management
 
@@ -137,15 +138,9 @@ allowance is added.
 
 ### Allowing for long upgrades
 
-A Stroom upgrade with a long database migration can take longer than the startup window, and the migrating node
-is then restarted part-way through. Before such an upgrade, raise `failureThreshold`, for example to `120` (10
-minutes), together with the image change:
-
-```yaml
-    - name: data
-      startupProbeTimings:
-        failureThreshold: 120
-```
+You don't need to raise `failureThreshold` for a Stroom upgrade: the database is migrated in a Job, which isn't
+subject to the startup probe, before the nodes start on the new version. To give a long migration more memory, or a
+time limit, see [Migration settings](../operations/upgrading.md#migration-settings).
 
 ## Seeing the probes Kubernetes uses
 

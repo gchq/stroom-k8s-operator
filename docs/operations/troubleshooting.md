@@ -73,14 +73,34 @@ Check the operator log. Common causes:
 - `DatabaseServer ... already claimed by StroomCluster ...`: each `DatabaseServer` serves only one cluster.
 - A Kubernetes validation error when updating a StatefulSet: you changed an immutable field. See
   [Applying changes](../configuration/index.md#applying-changes).
+- `Waiting for the database migration before creating or updating the nodes`: a new cluster's schema is created in
+  a Job before any node starts. See the next section if it doesn't finish.
+
+### The nodes aren't updated to a new Stroom version
+
+The operator migrates the database before updating the nodes. Check the `DatabaseMigrated` condition (see
+[Upgrading Stroom](upgrading.md#upgrading-stroom)):
+
+- `Running`: the migration Job is still running. Its log: `kubectl -n stroom logs job/<name>`, where the name is
+  in `kubectl -n stroom get jobs`.
+- `Failed`: the migration failed. Read the Job's log, then retry as described in
+  [If the migration fails](upgrading.md#if-the-migration-fails).
+- `DowngradeBlocked`: `spec.image` is older than the version the database is on. See
+  [Downgrades](upgrading.md#downgrades).
+- `Pending`: with `upgradeStrategy: Offline`, a node is still draining; otherwise an earlier migration is still
+  running.
+
+While the operator is waiting for its DatabaseServer to be updated, the migration doesn't start.
 
 ### Nodes restart during startup
 
 The startup probe ran out of time. Look at `kubectl describe pod` for `Startup probe failed` events, then:
 
 - `/stroom/logs/k8s/api.log`: token or API errors (see below).
-- The console log: is Stroom still migrating the database, or waiting for the bootstrap lock? If so, raise
-  `startupProbeTimings.failureThreshold`; see [Health probes](../configuration/health-probes.md#startup-probe).
+- The console log: is Stroom migrating the database, or waiting for the bootstrap lock? The operator normally
+  migrates it before the nodes start, so check `status.migratedImage` matches `spec.image`. If they match and a node
+  still migrates, raise `startupProbeTimings.failureThreshold`; see
+  [Health probes](../configuration/health-probes.md#startup-probe).
 - The console log: did Stroom fail to start, for example because of a configuration error or no database
   connection?
 
