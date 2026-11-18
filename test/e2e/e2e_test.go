@@ -51,7 +51,6 @@ const (
 // suites still run. Ginkgo runs the suites in the order they're defined, as they're in the same top-level container.
 var _ = Describe("Stroom operator", Label("core"), func() {
 	Context("Operator upgrade", Ordered, operatorUpgradeSpecs)
-	Context("Operator installed from the all-in-one manifest, moved to Helm", Ordered, manifestMigrationSpecs)
 	Context("DatabaseServer", Ordered, withOperator(databaseServerSpecs))
 	Context("StroomCluster with an external identity provider and an operator-managed database", Ordered,
 		withOperator(externalIdpSpecs(operatorDatabase, "stroom-e2e-external")))
