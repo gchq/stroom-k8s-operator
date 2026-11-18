@@ -86,11 +86,18 @@ var _ = BeforeSuite(func() {
 	}
 
 	By("loading images into the kind cluster")
-	for _, image := range append([]string{operatorImage}, testImages...) {
+	// The operator image is only built locally, so it must be loaded
+	mustRun("kind", "load", "docker-image", operatorImage, "--name", kindCluster)
+	for _, image := range testImages {
 		if _, err := run("docker", "image", "inspect", image); err != nil {
 			mustRun("docker", "pull", "-q", image)
 		}
-		mustRun("kind", "load", "docker-image", image, "--name", kindCluster)
+		// Loading only saves pulling the image in the cluster. With Docker's containerd image store, kind can't load
+		// an image pulled from a multi-platform index, as Docker saves only the pulled platform's content. The
+		// fixtures use imagePullPolicy IfNotPresent, so the cluster pulls any image that isn't loaded.
+		if output, err := run("kind", "load", "docker-image", image, "--name", kindCluster); err != nil {
+			_, _ = fmt.Fprintf(GinkgoWriter, "Not preloading %v, which the cluster will pull instead: %v\n%v\n", image, err, output)
+		}
 	}
 })
 
