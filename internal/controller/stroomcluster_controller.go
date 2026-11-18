@@ -193,27 +193,48 @@ func (r *StroomClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	r.warnOnIdentityProviderConflict(&stroomCluster)
 
-	// For INTERNAL_IDP, make sure the operator has a valid API key before any Stroom nodes need it.
-	// apiKeyResult schedules the next key check, and is returned once the rest of the cluster is reconciled.
-	apiKeyReady, apiKeyResult, err := r.ensureApiKey(ctx, &stroomCluster, &dbInfo)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if !apiKeyReady {
-		return apiKeyResult, nil
-	}
-
 	// Don't create or change the nodes while their DatabaseServer is being updated, as a node stopping then can't
 	// drain: its pre-stop hook needs the database. The DatabaseServer's update is applied first, and the nodes are
 	// updated once it's ready.
 	holdNodes := false
+	databaseServerHeld := false
 	if dbInfo.DatabaseServer != nil {
 		if settled, reason, err := r.databaseServerSettled(ctx, dbInfo.DatabaseServer); err != nil {
 			return ctrl.Result{}, err
 		} else if !settled {
 			logger.Info("Waiting for the DatabaseServer before creating or updating the nodes", "DatabaseServer", dbInfo.DatabaseServer.Name, "Reason", reason)
 			holdNodes = true
+			databaseServerHeld = true
 		}
+	}
+
+	// Migrate the database to spec.image before any node, or the API key Job, runs it. Not while the DatabaseServer is
+	// being updated, as a restart would interrupt the migration.
+	migrated := false
+	// Returned once the rest of the cluster is reconciled: the migration's schedule while migrating, then the API key's
+	finalResult := ctrl.Result{}
+	if !databaseServerHeld {
+		migrated, finalResult, err = r.ensureDatabaseMigrated(ctx, &stroomCluster, &dbInfo)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !migrated {
+			logger.Info("Waiting for the database migration before creating or updating the nodes", "Image", stroomCluster.Spec.Image.String())
+			holdNodes = true
+		}
+	}
+
+	// For INTERNAL_IDP, make sure the operator has a valid API key before any Stroom nodes need it. Only once the
+	// schema is migrated, so the CLI never runs a Stroom version the database isn't on.
+	if migrated {
+		apiKeyReady, apiKeyResult, err := r.ensureApiKey(ctx, &stroomCluster, &dbInfo)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !apiKeyReady {
+			return apiKeyResult, nil
+		}
+		finalResult = apiKeyResult
 	}
 
 	// Query the StroomCluster StatefulSet and if it doesn't exist, create it
@@ -289,11 +310,12 @@ func (r *StroomClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		logger.Info("Ingress reconciled", "Result", operationResult, "Namespace", existingIngress.Namespace, "Name", existingIngress.Name)
 	}
 
-	if holdNodes {
+	if databaseServerHeld {
 		// The DatabaseServer's StatefulSet isn't watched, so check it again shortly
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
-	return apiKeyResult, nil
+	// While migrating, the migration's own schedule; once migrated, the API key's
+	return finalResult, nil
 }
 
 // reconcileNodeStatefulSet creates or updates the StatefulSet running a NodeSet's nodes

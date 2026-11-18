@@ -128,6 +128,9 @@ func renderFixture(objects []client.Object) map[string]client.Object {
 				add(stroomClusterReconciler.createService(resource, nodeSet, resource.GetNodeSetHeadlessServiceName(nodeSet), corev1.ClusterIPNone))
 				add(stroomClusterReconciler.createService(resource, nodeSet, resource.GetNodeSetServiceName(nodeSet), ""))
 			}
+			// The API key Job only runs once the database is migrated to spec.image
+			resource.Status.MigratedImage = resource.Spec.Image.String()
+			add(stroomClusterReconciler.createApiKeyJob(resource, dbInfo))
 			for _, ingress := range stroomClusterReconciler.createIngresses(context.Background(), resource) {
 				add(&ingress)
 			}
