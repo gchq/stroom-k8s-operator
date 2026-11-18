@@ -4727,8 +4727,9 @@ spec:
                 description: The image the database schema was last migrated with
                 type: string
               migrationRetry:
-                description: The retry-migration annotation value the operator last
-                  acted on
+                description: |-
+                  The retry-migration annotation's value when the last migration failure was reported. Only a different value
+                  retries the migration
                 type: string
               nodes:
                 items:

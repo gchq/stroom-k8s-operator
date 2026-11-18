@@ -232,12 +232,7 @@ func (r *StroomClusterReconciler) runMigrationJob(ctx context.Context, stroomClu
 		if !errors.IsNotFound(err) {
 			return false, ctrl.Result{}, err
 		}
-		// This Job uses up any retry requested so far, so only a request made after it starts can re-run it.
-		// Recorded before creating the Job, so a crash in between can't leave an old request unused.
-		stroomCluster.Status.MigrationRetry = stroomCluster.Annotations[stroomv1.RetryMigrationAnnotation]
-		if err := r.Status().Update(ctx, stroomCluster); err != nil {
-			return false, ctrl.Result{}, err
-		}
+
 		newJob := r.createMigrationJob(stroomCluster, dbInfo)
 		logger.Info("Creating database migration Job", "Name", newJob.Name, "Image", target)
 		if err := r.Create(ctx, newJob); err != nil {
@@ -274,33 +269,40 @@ func (r *StroomClusterReconciler) runMigrationJob(ctx context.Context, stroomClu
 
 // handleFailedMigration keeps the nodes off the new version after a failed migration, and only re-runs it when the
 // retry-migration annotation is set to a value the operator hasn't acted on
+// handleFailedMigration keeps the nodes off the new version after a failed migration, and only re-runs it when the
+// retry-migration annotation is changed after the failure is reported
 func (r *StroomClusterReconciler) handleFailedMigration(ctx context.Context, stroomCluster *stroomv1.StroomCluster, job *batchv1.Job) (bool, ctrl.Result, error) {
-	target := stroomCluster.Spec.Image.String()
+	retry := stroomCluster.Annotations[stroomv1.RetryMigrationAnnotation]
 
-	if retry := stroomCluster.Annotations[stroomv1.RetryMigrationAnnotation]; retry != "" && retry != stroomCluster.Status.MigrationRetry {
+	if current := meta.FindStatusCondition(stroomCluster.Status.Conditions, stroomv1.ConditionDatabaseMigrated); current == nil || current.Reason != stroomv1.MigrationReasonFailed {
+		// The failure is new. Record the annotation's value now, so only a request made once the failure is reported,
+		// and someone can have looked at it, re-runs the migration
+		stroomCluster.Status.MigrationRetry = retry
+
+		target := stroomCluster.Spec.Image.String()
+		nodes := "No nodes start until it succeeds"
+		if migrated := stroomCluster.Status.MigratedImage; migrated != "" {
+			nodes = "The nodes stay on " + migrated
+		}
+		message := fmt.Sprintf("Migrating the database to %v failed. %v. See: kubectl logs -n %v job/%v. "+
+			"To retry, set the %v annotation to a new value", target, nodes, job.Namespace, job.Name, stroomv1.RetryMigrationAnnotation)
+		r.Recorder.Eventf(stroomCluster, job, corev1.EventTypeWarning, "MigrationFailed", "Migrate", "%v", message)
+		// No requeue: changing the annotation triggers the next reconcile. The condition changes, so this writes the
+		// status, including the recorded annotation value
+		return false, ctrl.Result{}, r.setMigrationCondition(ctx, stroomCluster, metav1.ConditionFalse,
+			stroomv1.MigrationReasonFailed, message)
+	}
+
+	if retry != "" && retry != stroomCluster.Status.MigrationRetry {
 		log.FromContext(ctx).Info("Retrying failed database migration", "Name", job.Name, "Retry", retry)
-		// The next reconcile creates a new Job, and records this request as used
+		// The condition stays Failed until the next reconcile creates a new Job and sets it to Running. If this Job is
+		// still visible then, it's deleted again rather than being reported as a new failure
 		if err := r.deleteJob(ctx, job); err != nil {
 			return false, ctrl.Result{}, err
 		}
-		return false, ctrl.Result{RequeueAfter: 5 * time.Second}, r.setMigrationCondition(ctx, stroomCluster,
-			metav1.ConditionFalse, stroomv1.MigrationReasonPending, "Retrying the migration to "+target)
+		return false, ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
-
-	nodes := "No nodes start until it succeeds"
-	if migrated := stroomCluster.Status.MigratedImage; migrated != "" {
-		nodes = "The nodes stay on " + migrated
-	}
-	message := fmt.Sprintf("Migrating the database to %v failed. %v. See: kubectl logs -n %v job/%v. "+
-		"To retry, set the %v annotation to a new value", target, nodes, job.Namespace, job.Name, stroomv1.RetryMigrationAnnotation)
-
-	// Emit the Event once, when the migration first fails, rather than on every reconcile
-	if current := meta.FindStatusCondition(stroomCluster.Status.Conditions, stroomv1.ConditionDatabaseMigrated); current == nil || current.Reason != stroomv1.MigrationReasonFailed {
-		r.Recorder.Eventf(stroomCluster, job, corev1.EventTypeWarning, "MigrationFailed", "Migrate", "%v", message)
-	}
-	// No requeue: setting the annotation triggers the next reconcile
-	return false, ctrl.Result{}, r.setMigrationCondition(ctx, stroomCluster, metav1.ConditionFalse,
-		stroomv1.MigrationReasonFailed, message)
+	return false, ctrl.Result{}, nil
 }
 
 // reconcileOtherMigrationJobs deals with migration Jobs for images other than spec.image, left behind when the image

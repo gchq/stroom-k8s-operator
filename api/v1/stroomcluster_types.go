@@ -39,7 +39,8 @@ type StroomClusterStatus struct {
 	// The image the database schema was last migrated with
 	MigratedImage string `json:"migratedImage,omitempty"`
 
-	// The retry-migration annotation value the operator last acted on
+	// The retry-migration annotation's value when the last migration failure was reported. Only a different value
+	// retries the migration
 	MigrationRetry string `json:"migrationRetry,omitempty"`
 
 	// The spec generation this status was written for
