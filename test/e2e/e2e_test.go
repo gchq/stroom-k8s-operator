@@ -601,8 +601,12 @@ func internalIdpSpecs() {
 		user, err := execInPod(namespace, pod, "stroom-node", "id -u")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(strings.TrimSpace(user)).To(Equal("1000"))
-		_, err = execInPod(namespace, pod, "stroom-node", "test -w /stroom/logs/k8s/api.log")
-		Expect(err).ToNot(HaveOccurred(), "the lifecycle scripts' log should be writable by the stroom user")
+		// The log directory, and every log the scripts wrote as root, such as node-start.log, which they always write.
+		// api.log is only written when an API call fails, so it may not exist.
+		output, err := execInPod(namespace, pod, "stroom-node",
+			`cd /stroom/logs/k8s && test -w . && test -e node-start.log && for f in *.log; do test -w "$f" || echo "$f"; done`)
+		Expect(err).ToNot(HaveOccurred(), "the lifecycle scripts' log directory should be writable by the stroom user, and hold node-start.log")
+		Expect(strings.TrimSpace(output)).To(BeEmpty(), "these lifecycle script logs should be writable by the stroom user")
 	})
 
 	It("should create an API key for the node lifecycle scripts", func() {
@@ -614,7 +618,8 @@ func internalIdpSpecs() {
 
 	It("should become ready, as the node startup script authenticates with the API key", func() {
 		waitForCondition(namespace, "pod/"+pod, "condition=Ready", stroomStartTimeout)
-		output, err := execInPod(namespace, pod, "stroom-node", "cat /stroom/logs/k8s/api.log")
+		// api.log is only written when an API call fails, so it normally doesn't exist
+		output, err := execInPod(namespace, pod, "stroom-node", "cat /stroom/logs/k8s/api.log 2> /dev/null; true")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(output).ToNot(ContainSubstring("fetchClientCredsToken failed. Response code: 400"))
 	})
