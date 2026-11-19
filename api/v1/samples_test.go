@@ -97,6 +97,10 @@ var _ = Describe("Samples", func() {
 			config, _, err := unstructured.NestedString(find(documents, "ConfigMap", "stroom-config").Object, "data", "config.yml")
 			Expect(err).ToNot(HaveOccurred())
 			Expect(config).To(ContainSubstring("identityProviderType: EXTERNAL_IDP"))
+			// The operator's own setting must agree with Stroom's, or it creates an API key it doesn't need
+			identityProviderType, _, err := unstructured.NestedString(cluster.Object, "spec", "identityProviderType")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(identityProviderType).To(Equal("EXTERNAL_IDP"))
 
 			clientSecret, _, err := unstructured.NestedString(cluster.Object, "spec", "openId", "clientSecret", "secretName")
 			Expect(err).ToNot(HaveOccurred())

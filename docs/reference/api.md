@@ -220,6 +220,21 @@ _Appears in:_ [StroomClusterSpec](#stroomclusterspec)
 | `tlsKeystorePasswordSecret` _[SecretItem](#secretitem)_ | Password of the keystore and truststore |  |  |
 
 
+### IdentityProviderType
+
+_Underlying type:_ string
+
+
+
+
+_Appears in:_ [StroomClusterSpec](#stroomclusterspec)
+
+| Value | Description |
+| --- | --- |
+| `INTERNAL_IDP` |  |
+| `EXTERNAL_IDP` |  |
+
+
 ### Image
 
 
@@ -483,7 +498,8 @@ _Appears in:_ [StroomCluster](#stroomcluster)
 | `appDatabaseName` _string_ | Name of the main Stroom database, usually `stroom` | `stroom` | Pattern: `^[A-Za-z0-9_]{1,64}$` |
 | `statsDatabaseName` _string_ | Name of the statistics database, usually `stats` | `stats` | Pattern: `^[A-Za-z0-9_]{1,64}$` |
 | `configMapRef` _[ConfigMapRef](#configmapref)_ | Override the Stroom configuration provided to each node, by providing the name of an existing `ConfigMap`<br />in the same namespace as the `StroomCluster` |  |  |
-| `openId` _[OpenIdConfiguration](#openidconfiguration)_ | Configures OpenID to enable operator components to query the Stroom API |  |  |
+| `openId` _[OpenIdConfiguration](#openidconfiguration)_ | Configures OpenID to enable operator components to query the Stroom API - Only needed with EXTERNAL_IDP |  | Optional |
+| `identityProviderType` _[IdentityProviderType](#identityprovidertype)_ | INTERNAL_IDP means the operator creates and manages an API key; EXTERNAL_IDP requires openId | `INTERNAL_IDP` | Enum: [INTERNAL_IDP EXTERNAL_IDP] |
 | `https` _[HttpsSettings](#httpssettings)_ | HTTPS settings. Omit to use plain-text (HTTP) |  | Optional |
 | `ingress` _[IngressSettings](#ingresssettings)_ |  |  | Required |
 | `podManagementPolicy` _[PodManagementPolicyType](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#podmanagementpolicytype-v1-apps)_ | Pod management policy to use when deploying or scaling the StroomCluster |  |  |

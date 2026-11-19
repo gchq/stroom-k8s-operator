@@ -18,20 +18,18 @@ const (
 	operatorNamespace  = "stroom-operator-system"
 	operatorDeployment = "deployment/stroom-operator-controller-manager"
 	// operatorRepository is the image repository the Helm chart deploys the operator from
-	operatorRepository = "ghcr.io/gradata-systems/stroom-k8s-operator"
-	// previousRepository is the image repository of the previous release, from before the move to GHCR
-	previousRepository = "gradata/stroom-k8s-operator"
-	// previousManifestImage is the operator image the previous release's all-in-one manifest installs
-	previousManifestImage = previousRepository + ":1.1.3"
+	operatorRepository = "gchq/stroom-k8s-operator"
+	// previousRepository is the image repository the previous release's Helm chart deploys the operator from
+	previousRepository = "gchq/stroom-k8s-operator"
 )
 
 var (
 	kindCluster = envOrDefault("KIND_CLUSTER", "stroom-operator-e2e")
 	// operatorTag is the tag of the operator image built and tested
 	operatorTag = envOrDefault("E2E_OPERATOR_TAG", "e2e")
-	// previousRelease is the operator release the upgrade suite upgrades from. Its charts come from the release's
-	// Git tag, and its image from the image registry.
-	previousRelease   = envOrDefault("E2E_PREVIOUS_RELEASE", "1.1.5")
+	// previousRelease is this repository's operator release the upgrade suite upgrades from. Its charts come from
+	// the release's Git tag, and its image from the image registry.
+	previousRelease   = envOrDefault("E2E_PREVIOUS_RELEASE", "2.0.0")
 	stroomTag         = envOrDefault("E2E_STROOM_TAG", "v7.13.2")
 	previousStroomTag = envOrDefault("E2E_PREVIOUS_STROOM_TAG", "v7.13.1")
 	keycloakImage     = envOrDefault("E2E_KEYCLOAK_IMAGE", "quay.io/keycloak/keycloak:26.0.7")
@@ -41,7 +39,6 @@ var (
 // Images used by the tests, which are loaded into the kind cluster in advance so pods don't wait on image pulls
 var testImages = []string{
 	previousRepository + ":" + previousRelease,
-	previousManifestImage,
 	"gchq/stroom:" + stroomTag,
 	"gchq/stroom:" + previousStroomTag,
 	"mysql/mysql-server:8.0.32",
@@ -86,11 +83,18 @@ var _ = BeforeSuite(func() {
 	}
 
 	By("loading images into the kind cluster")
-	for _, image := range append([]string{operatorImage}, testImages...) {
+	// The operator image is only built locally, so it must be loaded
+	mustRun("kind", "load", "docker-image", operatorImage, "--name", kindCluster)
+	for _, image := range testImages {
 		if _, err := run("docker", "image", "inspect", image); err != nil {
 			mustRun("docker", "pull", "-q", image)
 		}
-		mustRun("kind", "load", "docker-image", image, "--name", kindCluster)
+		// Loading only saves pulling the image in the cluster. With Docker's containerd image store, kind can't load
+		// an image pulled from a multi-platform index, as Docker saves only the pulled platform's content. The
+		// fixtures use imagePullPolicy IfNotPresent, so the cluster pulls any image that isn't loaded.
+		if output, err := run("kind", "load", "docker-image", image, "--name", kindCluster); err != nil {
+			_, _ = fmt.Fprintf(GinkgoWriter, "Not preloading %v, which the cluster will pull instead: %v\n%v\n", image, err, output)
+		}
 	}
 })
 
@@ -127,17 +131,6 @@ func deployOperatorCharts(chartsDir string, imageTag string) {
 		filepath.Join(absolute, "stroom-operator"), "-n", operatorNamespace,
 		"--set", "image.tag="+imageTag, "--set", "image.pullPolicy=IfNotPresent", "--wait", "--timeout", "5m")
 	mustKubectl("rollout", "status", "-n", operatorNamespace, operatorDeployment, "--timeout=5m")
-}
-
-// deployPreviousReleaseManifest installs the operator from the all-in-one manifest at the previous release's Git tag,
-// which releases up to 1.1.5 were published as. The 1.1.5 manifest was never regenerated, so it installs the 1.1.3
-// CRDs and operator (previousManifestImage), as users of it have.
-func deployPreviousReleaseManifest() {
-	manifest := mustRun("git", "show", previousRelease+":deploy/all-in-one.yaml")
-	path := filepath.Join(GinkgoT().TempDir(), "all-in-one.yaml")
-	Expect(os.WriteFile(path, []byte(manifest), 0o600)).To(Succeed())
-	mustKubectl("apply", "--server-side", "-f", path)
-	waitForCondition(operatorNamespace, operatorDeployment, "condition=Available", defaultTimeout)
 }
 
 // operatorKinds are the plural names of the operator's resource kinds, as its CRDs are named

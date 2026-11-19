@@ -22,6 +22,10 @@ function log() {
   line="[$(date '+%Y-%m-%d %H:%M:%S')] $log_msg"
   if ! { echo "$line" >> "$log_file"; } 2> /dev/null; then
     echo "$line (unable to write to $log_file)" >&2
+  elif [ "$(id -u)" = '0' ] && id stroom > /dev/null 2>&1; then
+    # prepare_log_dir only gives the stroom user the logs that exist when a script starts. Give it any log created
+    # since, or it stays owned by root, and can't be written if the pod is changed to run as the stroom user.
+    chown stroom:stroom "$log_file" 2> /dev/null || true
   fi
 }
 

@@ -13,6 +13,8 @@ spec:
   databaseServerRef: ${DATABASE_SERVER_REF}
   appDatabaseName: stroom
   statsDatabaseName: stats
+  # The pause image can't run the API key Job that INTERNAL_IDP needs
+  identityProviderType: EXTERNAL_IDP
   openId:
     clientId: stroom-operator
     clientSecret:
