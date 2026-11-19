@@ -8,6 +8,9 @@ spec:
   configMapRef:
     name: stroom-config
     itemName: config.yml
+  # Matches Stroom's identityProviderType in config.yml. The default, INTERNAL_IDP, has the operator create a Stroom
+  # API key for its node lifecycle scripts instead of using openId.
+  identityProviderType: EXTERNAL_IDP
   # The OpenID client the operator's node lifecycle scripts use to obtain a token
   openId:
     clientId: stroom-operator

@@ -13,6 +13,8 @@ spec:
   configMapRef:
     name: stroom-config
     itemName: config.yml
+  # Keycloak, as configured in the Stroom configuration
+  identityProviderType: EXTERNAL_IDP
   openId:
     clientId: stroom-operator
     clientSecret:

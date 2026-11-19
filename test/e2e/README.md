@@ -49,7 +49,7 @@ go test ./test/e2e/ -v -ginkgo.v -ginkgo.focus "external database"   # rerun one
 | core | External identity provider, operator-managed database | `stroom-e2e-external` | Keycloak, a Stroom user for the operator with only the Manage Nodes, Manage Jobs and Manage Tasks permissions, node start, health check filters, node drain, scaling the node set up and down, an identity provider outage, and deleting the cluster while a node has a processing task |
 | core | External identity provider, external database | `stroom-e2e-external-db` | As above, except scaling and the outage, with a MySQL server not managed by the operator (`external-mysql.yaml`), connected to by address |
 | core | Bootstrap lock and Stroom upgrade | `stroom-e2e-lock` | Two or more nodes waiting on the Stroom bootstrap lock, which the test holds, within the startup probe's lock wait allowance, then a rolling upgrade of Stroom |
-| core | Internal identity provider | `stroom-e2e-internal` | Stroom's bundled configuration with its internal identity provider, without and with HTTPS, then changed to run as the stroom user |
+| core | Internal identity provider | `stroom-e2e-internal` | Stroom's bundled configuration with its internal identity provider, without and with HTTPS, then changed to run as the stroom user; the operator's API key, with which the node becomes ready |
 | extended | Node roles, HTTPS, Ingress, log sender, autoscaling | `stroom-e2e-features` | Processing and frontend node sets and their managed jobs, the key store init container, ingress-nginx, the log sender sidecar, and StroomTaskAutoscaler with metrics-server |
 | extended | Volume claim delete policies | `stroom-e2e-volumes` | Each `volumeClaimDeletePolicy`, on scale-down and cluster deletion |
 | extended | Operator restarts | `stroom-e2e-restart` | Restarting the operator while idle, during a scale-up, and during cluster deletion |
@@ -77,7 +77,6 @@ changes the spec to assert the fixed behaviour, in the same change.
 
 | Spec | Current behaviour | Reference |
 |---|---|---|
-| Internal identity provider | Stroom starts, but node startup can't obtain a token, so the node never becomes ready | Stroom 7.13 rejects client credentials token requests with its internal identity provider, with 400 Bad Request |
 | Operator upgrade | The previous release never deploys a StroomCluster without a log sender, so the suite sets a disabled one | Fixed in 1.2.0 |
 
 The tests found, and pinned, these bugs in 1.1.5, which 1.2.0 fixes: a StroomCluster without a log sender was never

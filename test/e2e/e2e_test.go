@@ -198,6 +198,7 @@ func keycloakClusterValues(database databaseSource, namespace string) map[string
 		"STROOM_TAG":                  stroomTag,
 		"PROVISIONING_STROOM_TAG":     stroomTag,
 		"KEYCLOAK_IMAGE":              keycloakImage,
+		"IDENTITY_PROVIDER_TYPE":      "EXTERNAL_IDP",
 		"STROOM_CLIENT_SECRET":        stroomClientSecret,
 		"OPERATOR_CLIENT_SECRET":      operatorClientSecret,
 		"STROOM_SERVICE_ACCOUNT_ID":   stroomServiceAccountId,
@@ -537,6 +538,7 @@ func internalIdpSpecs() {
 		"STROOM_CLIENT_SECRET":   stroomClientSecret,
 		"OPERATOR_CLIENT_SECRET": operatorClientSecret,
 		"CONFIG_MAP_REF":         "# Uses the Stroom configuration bundled with the operator",
+		"IDENTITY_PROVIDER_TYPE": "INTERNAL_IDP",
 		"HTTPS":                  noHttps,
 		"POD_SECURITY_CONTEXT":   defaultSecurityContext,
 		"STROOM_NODES":           "1",
@@ -557,7 +559,7 @@ func internalIdpSpecs() {
 		deployDatabase(operatorDatabase, namespace, values)
 	})
 
-	// waitForStroom waits for the node's Stroom to report healthy. It never becomes ready, as its startup probe fails.
+	// waitForStroom waits for the node's Stroom to report healthy, which it does before the node is ready
 	waitForStroom := func() {
 		Eventually(func() string {
 			output, _ := execInPod(namespace, pod, "stroom-node",
@@ -603,21 +605,18 @@ func internalIdpSpecs() {
 		Expect(err).ToNot(HaveOccurred(), "the lifecycle scripts' log should be writable by the stroom user")
 	})
 
-	It("should fail to obtain a token for the node startup script", func() {
-		// BASELINE: known issue. Stroom 7.13 rejects client credentials token requests with its internal identity
-		// provider, so the node lifecycle scripts can't authenticate. The script also logs a failure, with response
-		// code 000, while Stroom is starting, so this looks for Stroom's rejection, a 400 Bad Request.
-		Eventually(func(g Gomega) {
-			output, err := execInPod(namespace, pod, "stroom-node", "cat /stroom/logs/k8s/api.log")
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(output).To(ContainSubstring("fetchClientCredsToken failed. Response code: 400"))
-		}, defaultTimeout, 15*time.Second).Should(Succeed())
+	It("should create an API key for the node lifecycle scripts", func() {
+		// Stroom 7.13 rejects client credentials token requests with its internal identity provider, so the operator
+		// creates a Stroom API key for the scripts instead
+		key := mustKubectl("get", "secret", "stroom-e2e-api-key", "-n", namespace, "-o", "jsonpath={.data.apiKey}")
+		Expect(key).ToNot(BeEmpty(), "the API key Secret should hold a key")
 	})
 
-	It("should never become ready", func() {
-		// BASELINE: known issue
-		ready := mustKubectl("get", "pod", "-n", namespace, pod, "-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`)
-		Expect(ready).To(Equal("False"))
+	It("should become ready, as the node startup script authenticates with the API key", func() {
+		waitForCondition(namespace, "pod/"+pod, "condition=Ready", stroomStartTimeout)
+		output, err := execInPod(namespace, pod, "stroom-node", "cat /stroom/logs/k8s/api.log")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(output).ToNot(ContainSubstring("fetchClientCredsToken failed. Response code: 400"))
 	})
 }
 
