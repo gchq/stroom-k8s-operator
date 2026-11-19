@@ -601,12 +601,18 @@ func internalIdpSpecs() {
 		user, err := execInPod(namespace, pod, "stroom-node", "id -u")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(strings.TrimSpace(user)).To(Equal("1000"))
-		// The log directory, and every log the scripts wrote as root, such as node-start.log, which they always write.
-		// api.log is only written when an API call fails, so it may not exist.
+
+		// Ready once node-start.sh has succeeded as the stroom user. Stroom starts in seconds here, as the database is
+		// already migrated, so its health check passes before the startup probe has run the script.
+		waitForCondition(namespace, "pod/"+pod, "condition=Ready", stroomStartTimeout)
+		// The log directory, node-start.log, which the script has now written, and every log written as root before, such
+		// as pre-stop.log from stopping the previous pod. api.log is only written when an API call fails.
 		output, err := execInPod(namespace, pod, "stroom-node",
 			`cd /stroom/logs/k8s && test -w . && test -e node-start.log && for f in *.log; do test -w "$f" || echo "$f"; done`)
-		Expect(err).ToNot(HaveOccurred(), "the lifecycle scripts' log directory should be writable by the stroom user, and hold node-start.log")
-		Expect(strings.TrimSpace(output)).To(BeEmpty(), "these lifecycle script logs should be writable by the stroom user")
+		Expect(err).ToNot(HaveOccurred(), "the lifecycle scripts' log directory should be writable by the stroom user, and hold node-start.log:\n%v",
+			lifecycleLogs(namespace, pod))
+		Expect(strings.TrimSpace(output)).To(BeEmpty(), "these lifecycle script logs should be writable by the stroom user:\n%v",
+			lifecycleLogs(namespace, pod))
 	})
 
 	It("should create an API key for the node lifecycle scripts", func() {
