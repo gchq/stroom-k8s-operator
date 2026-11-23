@@ -84,7 +84,8 @@ The operator migrates the database before updating the nodes. Check the `Databas
 - `Running`: the migration Job is still running. Its log: `kubectl -n stroom logs job/<name>`, where the name is
   in `kubectl -n stroom get jobs`.
 - `Failed`: the migration failed. Read the Job's log, then retry as described in
-  [If the migration fails](upgrading.md#if-the-migration-fails).
+  [If the migration fails](upgrading.md#if-the-migration-fails), or, if you've completed the migration yourself,
+  [skip it](upgrading.md#skipping-the-migration).
 - `DowngradeBlocked`: `spec.image` is older than the version the database is on. See
   [Downgrades](upgrading.md#downgrades).
 - `Pending`: with `upgradeStrategy: Offline`, a node is still draining; otherwise an earlier migration is still

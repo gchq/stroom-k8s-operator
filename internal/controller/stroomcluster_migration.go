@@ -48,6 +48,11 @@ func (r *StroomClusterReconciler) ensureDatabaseMigrated(ctx context.Context, st
 
 	target := stroomCluster.Spec.Image.String()
 	if !migrationPending(stroomCluster) {
+		// Keep reporting a skipped migration as skipped, rather than as one the operator ran
+		if current := meta.FindStatusCondition(stroomCluster.Status.Conditions, stroomv1.ConditionDatabaseMigrated); current != nil &&
+			current.Status == metav1.ConditionTrue && current.Reason == stroomv1.MigrationReasonSkipped {
+			return true, ctrl.Result{}, nil
+		}
 		return true, ctrl.Result{}, r.setMigrationCondition(ctx, stroomCluster, metav1.ConditionTrue,
 			stroomv1.MigrationReasonSucceeded, "Database schema is migrated to "+target)
 	}
@@ -66,6 +71,11 @@ func (r *StroomClusterReconciler) ensureDatabaseMigrated(ctx context.Context, st
 			return false, ctrl.Result{}, r.setMigrationCondition(ctx, stroomCluster, metav1.ConditionFalse,
 				stroomv1.MigrationReasonDowngradeBlocked, message)
 		}
+	}
+
+	// Skipping is checked after the downgrade check, so it can't be used to downgrade without allow-downgrade
+	if stroomCluster.Annotations[stroomv1.SkipMigrationAnnotation] == "true" {
+		return r.skipMigration(ctx, stroomCluster)
 	}
 
 	// Offline: stop every node before the schema changes. A fresh install has no nodes to stop.
@@ -351,4 +361,38 @@ func migrationJobImage(job *batchv1.Job) string {
 		}
 	}
 	return ""
+}
+
+// skipMigration records spec.image as migrated without running the migration Job, as the skip-migration annotation
+// asks. A finished Job for the image, such as one that failed, is deleted. A running one is left to finish first, as
+// the nodes mustn't start on a schema part-way through a migration.
+func (r *StroomClusterReconciler) skipMigration(ctx context.Context, stroomCluster *stroomv1.StroomCluster) (bool, ctrl.Result, error) {
+	target := stroomCluster.Spec.Image.String()
+
+	job := batchv1.Job{}
+	jobName := types.NamespacedName{Namespace: stroomCluster.Namespace, Name: stroomCluster.GetCliJobName(migrationJobSuffix(target))}
+	if err := r.Get(ctx, jobName, &job); err == nil {
+		if getJobFinishedCondition(&job) == nil {
+			// No requeue: the Job finishing triggers the next reconcile
+			return false, ctrl.Result{}, r.setMigrationCondition(ctx, stroomCluster, metav1.ConditionFalse,
+				stroomv1.MigrationReasonRunning, "Waiting for the running migration to "+target+" to finish before skipping it")
+		}
+		if err := r.deleteJob(ctx, &job); err != nil {
+			return false, ctrl.Result{}, err
+		}
+	} else if !errors.IsNotFound(err) {
+		return false, ctrl.Result{}, err
+	}
+
+	message := fmt.Sprintf("Skipped migrating the database to %v, as the %v annotation is \"true\". The operator assumes the "+
+		"database is already on that version", target, stroomv1.SkipMigrationAnnotation)
+	log.FromContext(ctx).Info("Skipping the database migration", "Image", target)
+	r.Recorder.Eventf(stroomCluster, nil, corev1.EventTypeWarning, "MigrationSkipped", "Migrate", "%v", message)
+
+	stroomCluster.Status.MigratedImage = target
+	if err := r.Status().Update(ctx, stroomCluster); err != nil {
+		return false, ctrl.Result{}, err
+	}
+	return true, ctrl.Result{}, r.setMigrationCondition(ctx, stroomCluster, metav1.ConditionTrue,
+		stroomv1.MigrationReasonSkipped, message)
 }

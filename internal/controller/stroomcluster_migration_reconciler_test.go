@@ -390,4 +390,63 @@ var _ = Describe("StroomCluster database migration", func() {
 			Expect(jobs()).To(BeEmpty())
 		})
 	})
+
+	Context("with the skip-migration annotation", func() {
+		BeforeEach(func() {
+			cluster.Annotations = map[string]string{stroomv1.SkipMigrationAnnotation: "true"}
+		})
+
+		It("should record the image as migrated without a Job, and keep reporting the skip", func() {
+			start()
+
+			Expect(ensure()).To(BeTrue())
+			Expect(cluster.Status.MigratedImage).To(Equal("gchq/stroom:v7.13.2"))
+			Expect(condition().Status).To(Equal(metav1.ConditionTrue))
+			Expect(condition().Reason).To(Equal(stroomv1.MigrationReasonSkipped))
+			Expect(recorder.Events).To(Receive(ContainSubstring("MigrationSkipped")))
+			Expect(jobs()).To(BeEmpty())
+
+			By("checking again")
+			Expect(ensure()).To(BeTrue())
+			Expect(condition().Reason).To(Equal(stroomv1.MigrationReasonSkipped))
+			Expect(recorder.Events).ToNot(Receive())
+		})
+
+		It("should remove a failed migration's Job, and skip it", func() {
+			cluster.Annotations = nil
+			start()
+			Expect(ensure()).To(BeFalse())
+			finishJob(migrationJob(), batchv1.JobFailed)
+			Expect(ensure()).To(BeFalse())
+			Expect(condition().Reason).To(Equal(stroomv1.MigrationReasonFailed))
+
+			annotate(stroomv1.SkipMigrationAnnotation, "true")
+			Expect(ensure()).To(BeTrue())
+			Expect(condition().Reason).To(Equal(stroomv1.MigrationReasonSkipped))
+			Expect(jobs()).To(BeEmpty())
+		})
+
+		It("should wait for a running migration to finish before skipping it", func() {
+			cluster.Annotations = nil
+			start()
+			Expect(ensure()).To(BeFalse())
+
+			annotate(stroomv1.SkipMigrationAnnotation, "true")
+			Expect(ensure()).To(BeFalse())
+			Expect(jobs()).To(HaveLen(1))
+			Expect(cluster.Status.MigratedImage).To(BeEmpty())
+
+			finishJob(migrationJob(), batchv1.JobFailed)
+			Expect(ensure()).To(BeTrue())
+			Expect(condition().Reason).To(Equal(stroomv1.MigrationReasonSkipped))
+		})
+
+		It("should still refuse to downgrade", func() {
+			start(nodeStatefulSet("gchq/stroom:v7.13.3"))
+
+			Expect(ensure()).To(BeFalse())
+			Expect(condition().Reason).To(Equal(stroomv1.MigrationReasonDowngradeBlocked))
+			Expect(cluster.Status.MigratedImage).To(Equal("gchq/stroom:v7.13.3"))
+		})
+	})
 })

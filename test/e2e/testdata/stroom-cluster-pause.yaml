@@ -4,6 +4,9 @@ apiVersion: stroom.gchq.github.io/v1
 kind: StroomCluster
 metadata:
   name: ${CLUSTER_NAME}
+  annotations:
+    # The pause image can't run the database migration Job
+    stroom.gchq.github.io/skip-migration: "true"
 spec:
   image:
     repository: registry.k8s.io/pause

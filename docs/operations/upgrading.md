@@ -131,6 +131,7 @@ kubectl -n stroom get stroomcluster dev \
 | `Succeeded` | The database is migrated to `spec.image`, and the nodes run it |
 | `Failed` | The migration Job failed. See [If the migration fails](#if-the-migration-fails) |
 | `DowngradeBlocked` | `spec.image` is older than the migrated version. See [Downgrades](#downgrades) |
+| `Skipped` | The migration to `spec.image` was skipped. See [Skipping the migration](#skipping-the-migration) |
 
 A new cluster's schema is created the same way, before its first node starts. When you upgrade the operator, an
 existing cluster records the image its nodes run as `status.migratedImage`, without migrating.
@@ -182,7 +183,30 @@ kubectl -n stroom annotate stroomcluster dev stroom.gchq.github.io/retry-migrati
 ```
 
 Only a value set after the failure was reported retries, and each value retries once. If you change `spec.image`
-instead, the failed Job is deleted and the new image is migrated.
+instead, the failed Job is deleted and the new image is migrated. If you've completed the migration yourself, skip it
+instead (see below).
+
+### Skipping the migration
+
+To have the operator treat the database as already on `spec.image`'s version, without running the migration Job, set:
+
+```shell
+kubectl -n stroom annotate stroomcluster dev stroom.gchq.github.io/skip-migration=true
+```
+
+For example, when the database was migrated outside the operator, or fixed by hand after a failed migration. The
+operator records `spec.image` as `status.migratedImage`, sets the `DatabaseMigrated` condition to `Skipped`, emits a
+`MigrationSkipped` Warning event, and rolls the nodes. A failed migration Job for that image is deleted. A running one
+is left to finish first, as the nodes mustn't start part-way through a migration.
+
+While the annotation is set, every later change of `spec.image` is skipped too, so remove it once it has done its job:
+
+```shell
+kubectl -n stroom annotate stroomcluster dev stroom.gchq.github.io/skip-migration-
+```
+
+Skipping doesn't bypass the [downgrade](#downgrades) check. Nodes started on a version the database isn't on may fail,
+or damage data, so only skip a migration you know is complete.
 
 ### Downgrades
 

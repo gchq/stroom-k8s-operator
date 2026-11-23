@@ -31,6 +31,7 @@ const (
 	MigrationReasonSucceeded        = "Succeeded"
 	MigrationReasonFailed           = "Failed"
 	MigrationReasonDowngradeBlocked = "DowngradeBlocked"
+	MigrationReasonSkipped          = "Skipped"
 )
 
 // StroomClusterStatus defines the observed state of StroomCluster

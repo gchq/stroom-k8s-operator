@@ -13,4 +13,8 @@ const (
 
 	// AllowDowngradeAnnotation, set to "true", lets a StroomCluster move to an older Stroom version
 	AllowDowngradeAnnotation = "stroom.gchq.github.io/allow-downgrade"
+
+	// SkipMigrationAnnotation, set to "true", records spec.image as migrated without running the migration Job. For a
+	// database migrated outside the operator, or fixed by hand after a failed migration, or an image that isn't Stroom.
+	SkipMigrationAnnotation = "stroom.gchq.github.io/skip-migration"
 )

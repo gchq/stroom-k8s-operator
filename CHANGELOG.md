@@ -26,7 +26,9 @@ See [Upgrading Stroom](https://gradata-systems.github.io/stroom-k8s-operator/ope
   stops them first, for upgrades that shouldn't run mixed versions.
 - `spec.migration`: a deadline, `JAVA_OPTS` and resources for the migration Job. By default it has no deadline.
 - `status.migratedImage`, `status.observedGeneration` and the `DatabaseMigrated` condition, with the reasons
-  `Pending`, `Running`, `Succeeded`, `Failed` and `DowngradeBlocked`.
+  `Pending`, `Running`, `Succeeded`, `Failed`, `DowngradeBlocked` and `Skipped`.
+- The `stroom.gchq.github.io/skip-migration` annotation, set to `"true"`, records `spec.image` as migrated without
+  running the migration Job: for a database migrated outside the operator, or fixed by hand after a failed migration.
 
 ### Fixed
 
