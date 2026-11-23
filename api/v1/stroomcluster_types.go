@@ -23,13 +23,33 @@ import (
 )
 
 const (
-	StroomClusterLabel = "stroom/cluster"
-	NodeSetLabel       = "stroom/nodeSet"
+	StroomClusterLabel              = "stroom/cluster"
+	NodeSetLabel                    = "stroom/nodeSet"
+	ConditionDatabaseMigrated       = "DatabaseMigrated"
+	MigrationReasonPending          = "Pending"
+	MigrationReasonRunning          = "Running"
+	MigrationReasonSucceeded        = "Succeeded"
+	MigrationReasonFailed           = "Failed"
+	MigrationReasonDowngradeBlocked = "DowngradeBlocked"
+	MigrationReasonSkipped          = "Skipped"
 )
 
 // StroomClusterStatus defines the observed state of StroomCluster
 type StroomClusterStatus struct {
 	Nodes []string `json:"nodes,omitempty"`
+	// The image the database schema was last migrated with
+	MigratedImage string `json:"migratedImage,omitempty"`
+
+	// The retry-migration annotation's value when the last migration failure was reported. Only a different value
+	// retries the migration
+	MigrationRetry string `json:"migrationRetry,omitempty"`
+
+	// The spec generation this status was written for
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	//+listType=map
+	//+listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 //+kubebuilder:object:root=true

@@ -1,0 +1,112 @@
+metadata:
+  labels:
+    app.kubernetes.io/component: stroom-cluster
+    app.kubernetes.io/name: stroom
+    stroom/cluster: minimal
+  name: stroom-minimal-cli-api-key
+  namespace: golden-minimal
+  ownerReferences:
+  - apiVersion: stroom.gchq.github.io/v1
+    blockOwnerDeletion: true
+    controller: true
+    kind: StroomCluster
+    name: minimal
+    uid: <uid>
+spec:
+  activeDeadlineSeconds: 1200
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: stroom-cluster
+        app.kubernetes.io/name: stroom
+        stroom/cluster: minimal
+    spec:
+      affinity: {}
+      containers:
+      - args:
+        - bash
+        - /stroom/scripts/create-stroom-api-key.sh
+        env:
+        - name: STROOM_JDBC_DRIVER_URL
+          value: jdbc:mysql://stroom-minimal-db:3306/stroom?serverTimezone=UTC&useUnicode=yes&characterEncoding=UTF-8
+        - name: STROOM_JDBC_DRIVER_CLASS_NAME
+          value: com.mysql.cj.jdbc.Driver
+        - name: STROOM_JDBC_DRIVER_USERNAME
+          value: stroomuser
+        - name: STROOM_JDBC_DRIVER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: stroomuser
+              name: stroom-minimal-db
+        - name: STROOM_STATISTICS_JDBC_DRIVER_URL
+          value: jdbc:mysql://stroom-minimal-db:3306/stats?serverTimezone=UTC&useUnicode=yes&characterEncoding=UTF-8
+        - name: STROOM_STATISTICS_JDBC_DRIVER_CLASS_NAME
+          value: com.mysql.cj.jdbc.Driver
+        - name: STROOM_STATISTICS_JDBC_DRIVER_USERNAME
+          value: stroomuser
+        - name: STROOM_STATISTICS_JDBC_DRIVER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: stroomuser
+              name: stroom-minimal-db
+        - name: STROOM_TEMP
+          value: /stroom/tmp
+        - name: IDENTITY_PROVIDER_TYPE
+          value: INTERNAL_IDP
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: STROOM_API_KEY_SECRET_NAME
+          value: stroom-minimal-api-key
+        - name: JAVA_OPTS
+          value: -Xms128m -Xmx1g
+        - name: STROOM_NODE
+          value: stroom-minimal-node-node-0
+        - name: POD_HOSTNAME
+          value: stroom-minimal-node-node-0
+        - name: POD_SUBDOMAIN
+          value: stroom-minimal-node-node.golden-minimal.svc.cluster.local
+        - name: API_GATEWAY_HOST
+          value: stroom.example.com
+        image: gchq/stroom:latest
+        name: create-api-key
+        resources:
+          limits:
+            memory: 1536Mi
+          requests:
+            cpu: 250m
+            memory: 1Gi
+        securityContext: {}
+        volumeMounts:
+        - mountPath: /stroom/scripts/create-stroom-api-key.sh
+          name: static-content
+          readOnly: true
+          subPath: create-stroom-api-key.sh
+        - mountPath: /tmp/api-key
+          name: api-key-output
+        - mountPath: /stroom/tmp
+          name: stroom-tmp
+        - mountPath: /stroom/logs
+          name: stroom-logs
+        - mountPath: /stroom/config/config.yml
+          name: static-content
+          readOnly: true
+          subPath: stroomcluster-config.yaml
+      restartPolicy: Never
+      securityContext: {}
+      serviceAccountName: stroom-minimal
+      volumes:
+      - configMap:
+          defaultMode: 364
+          name: stroom-minimal-static-content
+        name: static-content
+      - emptyDir: {}
+        name: api-key-output
+      - emptyDir: {}
+        name: stroom-tmp
+      - emptyDir: {}
+        name: stroom-logs
+  ttlSecondsAfterFinished: 3600
+status: {}

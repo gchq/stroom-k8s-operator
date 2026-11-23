@@ -46,6 +46,13 @@ type StroomClusterSpec struct {
 	// Delete Stroom node `PersistentVolumeClaim`s in accordance with this policy
 	VolumeClaimDeletePolicy VolumeClaimDeletePolicy `json:"volumeClaimDeletePolicy,omitempty"`
 
+	// Whether nodes keep serving on the old version while the database is migrated to a new one
+	// +kubebuilder:default:=Online
+	UpgradeStrategy UpgradeStrategy `json:"upgradeStrategy,omitempty"`
+	// Settings for the Job that migrates the database when the Stroom version changes
+	// +kubebuilder:validation:Optional
+	Migration MigrationSettings `json:"migration,omitempty"`
+
 	// Each NodeSet is a functional grouping of Stroom nodes with a particular role, within the cluster.
 	// It is recommended two NodeSets should be provided: one for storing and processing data and a separate one for
 	// serving the Stroom front-end.

@@ -26,6 +26,7 @@ var _ = Describe("Stroom operator, extended", Label("extended"), func() {
 		withOperator(featureSpecs))
 	Context("StroomCluster volume claim delete policies", Ordered, withOperator(volumeClaimDeletePolicySpecs))
 	Context("Operator restarts", Ordered, withOperator(operatorRestartSpecs))
+	Context("Offline Stroom upgrade", Ordered, withOperator(offlineUpgradeSpecs))
 	Context("Sample deployment with an operator-managed database", Ordered, withOperator(sampleOperatorDatabaseSpecs))
 	Context("Sample deployment with an external database", Ordered, withOperator(sampleExternalDatabaseSpecs))
 })

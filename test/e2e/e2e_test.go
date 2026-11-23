@@ -56,7 +56,7 @@ var _ = Describe("Stroom operator", Label("core"), func() {
 		withOperator(externalIdpSpecs(operatorDatabase, "stroom-e2e-external")))
 	Context("StroomCluster with an external identity provider and an external database", Ordered,
 		withOperator(externalIdpSpecs(externalDatabase, "stroom-e2e-external-db")))
-	Context("StroomCluster waiting on the Stroom bootstrap lock, and a Stroom upgrade", Ordered,
+	Context("StroomCluster database migration waiting on the Stroom bootstrap lock, and a Stroom upgrade", Ordered,
 		withOperator(bootstrapLockSpecs))
 	Context("StroomCluster with Stroom's internal identity provider", Ordered, withOperator(internalIdpSpecs))
 })
@@ -212,6 +212,7 @@ func keycloakClusterValues(database databaseSource, namespace string) map[string
 		"STARTUP_INITIAL_DELAY":       "10",
 		"STARTUP_FAILURE_THRESHOLD":   "60",
 		"LOCK_WAIT_ALLOWANCE":         "# Default lockWaitAllowanceSeconds",
+		"UPGRADE_STRATEGY":            "# Default upgradeStrategy",
 	}
 	for name, value := range databaseValues(database, namespace) {
 		values[name] = value
@@ -547,6 +548,7 @@ func internalIdpSpecs() {
 		// Allow time for the initial database migration, then give up
 		"STARTUP_FAILURE_THRESHOLD": "90",
 		"LOCK_WAIT_ALLOWANCE":       "# Default lockWaitAllowanceSeconds",
+		"UPGRADE_STRATEGY":          "# Default upgradeStrategy",
 	}
 
 	for name, value := range databaseValues(operatorDatabase, namespace) {

@@ -97,27 +97,138 @@ If the new operator Pod fails to start, the old one keeps running until it does.
 1. Read the Stroom release notes for the target version, particularly for database migrations and configuration
    changes. If you use your own configuration, update it first.
 2. [Back up](../database/backups.md) the database.
-3. If the upgrade includes a long database migration, raise the
-   [startup probe's `failureThreshold`](../configuration/health-probes.md#allowing-for-long-upgrades) in the same
-   change.
+3. Decide whether the nodes keep running during the migration (see [Upgrade strategy](#upgrade-strategy)).
 4. Change `spec.image.tag` and apply the manifest:
 
     ```shell
     kubectl apply -f stroom-cluster.yaml
+    kubectl -n stroom wait stroomcluster/dev --for=jsonpath='{.status.migratedImage}'=gchq/stroom:<new tag> --timeout=2h
     kubectl -n stroom rollout status statefulset/stroom-dev-node-data
     kubectl -n stroom rollout status statefulset/stroom-dev-node-ui
     ```
 
-The operator updates each node set's StatefulSet, and Kubernetes replaces the nodes one at a time, starting from
-the highest ordinal. Each node is drained before it stops, and the next node isn't replaced until the new one is
-`Ready`. The first node on the new version migrates the database.
+When `spec.image` changes, the operator migrates the database before any node runs the new version:
 
-!!! warning "Mixed versions during a rolling upgrade"
-    While the rollout is in progress, nodes on the old and new versions run side by side against the migrated
-    database. That's normally fine for patch releases. For upgrades between minor versions, check the Stroom
-    release notes; if they advise against mixed versions, stop the cluster first (see
-    [Stopping and removal](stopping-and-removal.md#stopping-a-stroom-cluster)), change the image, and start it
-    again.
+1. It holds every node set on its current version.
+2. It runs `./start.sh migrate` on the new image in a Job, `stroom-dev-cli-migrate-<hash>`. The Job has no
+   deadline by default and is never retried automatically, so a long migration isn't stopped partway through.
+3. Once the Job succeeds, it records the new image in `status.migratedImage`, deletes the Job, and updates the
+   StatefulSets. Kubernetes then replaces the nodes one at a time, starting from the highest ordinal. Each node is
+   drained before it stops, and the next node isn't replaced until the new one is `Ready`.
+
+The nodes no longer migrate the database themselves, so the startup probe doesn't need extra time for an upgrade.
+Progress is reported in the `DatabaseMigrated` condition:
+
+```shell
+kubectl -n stroom get stroomcluster dev \
+  -o jsonpath='{.status.migratedImage}{"\n"}{range .status.conditions[?(@.type=="DatabaseMigrated")]}{.reason}: {.message}{"\n"}{end}'
+```
+
+| Reason | Meaning |
+|---|---|
+| `Pending` | Waiting to start: the nodes are stopping (Offline), or an earlier migration is still running |
+| `Running` | The migration Job is running |
+| `Succeeded` | The database is migrated to `spec.image`, and the nodes run it |
+| `Failed` | The migration Job failed. See [If the migration fails](#if-the-migration-fails) |
+| `DowngradeBlocked` | `spec.image` is older than the migrated version. See [Downgrades](#downgrades) |
+| `Skipped` | The migration to `spec.image` was skipped. See [Skipping the migration](#skipping-the-migration) |
+
+A new cluster's schema is created the same way, before its first node starts. When you upgrade the operator, an
+existing cluster records the image its nodes run as `status.migratedImage`, without migrating.
+
+### Upgrade strategy
+
+`spec.upgradeStrategy` decides what the nodes do while the database is migrated:
+
+- **`Online`** (the default): the nodes keep running the old version during the migration, then are replaced one
+  at a time. Until the rollout finishes, nodes on the old version run against the migrated schema. That's normally
+  fine for patch releases.
+- **`Offline`**: every node set is scaled to zero first. Each node drains as it stops, and the migration starts once
+  the last node has gone. Once it succeeds, the nodes start on the new version. Use this when the Stroom release
+  notes advise against running mixed versions, typically between minor versions. The nodes' volumes are kept,
+  whatever the `volumeClaimDeletePolicy`.
+
+```yaml
+spec:
+  upgradeStrategy: Offline
+```
+
+### Migration settings
+
+`spec.migration` configures the migration Job:
+
+| Field | Default | Description |
+|---|---|---|
+| `activeDeadlineSeconds` | None | Seconds the migration may run before Kubernetes stops it. Unset means no limit |
+| `javaOpts` | `-Xms128m -Xmx1g` | `JAVA_OPTS` for the migration process. Raise `-Xmx` for a large database |
+| `resources` | 250m CPU and 1Gi memory requested, 1536Mi limit | Resources for the migration container. Keep the memory limit above `-Xmx` |
+
+The Job runs with the first node set's security context, node selector, affinity and tolerations.
+
+### If the migration fails
+
+The nodes stay on the previous version (or, for a new cluster, don't start), the `DatabaseMigrated` condition is
+`Failed`, and a `MigrationFailed` Warning event names the Job. The Job is kept, so its log can be read:
+
+```shell
+kubectl -n stroom logs job/stroom-dev-cli-migrate-<hash>
+```
+
+A migration stopped partway through may leave the schema partly changed, so the operator doesn't retry by itself.
+Once you've found the cause, and restored the database from the backup if needed, retry by setting the
+`stroom.gchq.github.io/retry-migration` annotation to a new value:
+
+```shell
+kubectl -n stroom annotate stroomcluster dev stroom.gchq.github.io/retry-migration="$(date +%s)" --overwrite
+```
+
+Only a value set after the failure was reported retries, and each value retries once. If you change `spec.image`
+instead, the failed Job is deleted and the new image is migrated. If you've completed the migration yourself, skip it
+instead (see below).
+
+### Skipping the migration
+
+To have the operator treat the database as already on `spec.image`'s version, without running the migration Job, set:
+
+```shell
+kubectl -n stroom annotate stroomcluster dev stroom.gchq.github.io/skip-migration=true
+```
+
+For example, when the database was migrated outside the operator, or fixed by hand after a failed migration. The
+operator records `spec.image` as `status.migratedImage`, sets the `DatabaseMigrated` condition to `Skipped`, emits a
+`MigrationSkipped` Warning event, and rolls the nodes. A failed migration Job for that image is deleted. A running one
+is left to finish first, as the nodes mustn't start part-way through a migration.
+
+While the annotation is set, every later change of `spec.image` is skipped too, so remove it once it has done its job:
+
+```shell
+kubectl -n stroom annotate stroomcluster dev stroom.gchq.github.io/skip-migration-
+```
+
+Skipping doesn't bypass the [downgrade](#downgrades) check. Nodes started on a version the database isn't on may fail,
+or damage data, so only skip a migration you know is complete.
+
+### Downgrades
+
+A database migrated to a newer Stroom version may not work with an older one, so the operator refuses to move
+`spec.image` to an older version than `status.migratedImage`. It sets the `DatabaseMigrated` condition to
+`DowngradeBlocked`, emits a `DowngradeBlocked` Warning event, and keeps the nodes as they are. Change `spec.image`
+back to continue.
+
+To downgrade anyway, for example after restoring a backup taken on the older version, set:
+
+```shell
+kubectl -n stroom annotate stroomcluster dev stroom.gchq.github.io/allow-downgrade=true
+```
+
+Versions are compared by their image tags (a leading `v` and pre-release suffixes are allowed). If either tag isn't
+a version, such as `latest`, the operator emits a `MigrationVersionUnknown` Warning event and migrates without the
+check.
+
+!!! note "Changing the image during a migration"
+    If `spec.image` changes while a migration is running, the operator waits for it to finish before acting on the
+    new image, so two migrations never run at once. A migration that finishes is recorded, so the downgrade check
+    compares against the version the database is actually on.
 
 ## Upgrade notes
 

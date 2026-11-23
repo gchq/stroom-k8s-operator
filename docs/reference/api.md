@@ -321,6 +321,21 @@ _Appears in:_ [StroomClusterSpec](#stroomclusterspec)
 | `tls` _[TlsSettings](#tlssettings)_ |  |  |  |
 
 
+### MigrationSettings
+
+
+MigrationSettings configures the Job that migrates the database to a new Stroom version
+
+
+_Appears in:_ [StroomClusterSpec](#stroomclusterspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `activeDeadlineSeconds` _integer_ | Seconds the migration may run before it's killed. Unset means no limit |  | Minimum: 1 |
+| `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#resourcerequirements-v1-core)_ | Resources for the migration container |  |  |
+| `javaOpts` _string_ | JAVA_OPTS for the migration process. Defaults to "-Xms128m -Xmx1g" |  |  |
+
+
 ### NodeRole
 
 _Underlying type:_ string
@@ -505,6 +520,8 @@ _Appears in:_ [StroomCluster](#stroomcluster)
 | `podManagementPolicy` _[PodManagementPolicyType](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#podmanagementpolicytype-v1-apps)_ | Pod management policy to use when deploying or scaling the StroomCluster |  |  |
 | `nodeTerminationPeriodSecs` _integer_ | Amount of time granted to nodes to drain their active tasks before being terminated | `60` |  |
 | `volumeClaimDeletePolicy` _[VolumeClaimDeletePolicy](#volumeclaimdeletepolicy)_ | Delete Stroom node `PersistentVolumeClaim`s in accordance with this policy |  | Enum: [DeleteOnScaledownAndClusterDeletion DeleteOnScaledownOnly] |
+| `upgradeStrategy` _[UpgradeStrategy](#upgradestrategy)_ | Whether nodes keep serving on the old version while the database is migrated to a new one | `Online` | Enum: [Online Offline] |
+| `migration` _[MigrationSettings](#migrationsettings)_ | Settings for the Job that migrates the database when the Stroom version changes |  | Optional |
 | `nodeSets` _[NodeSet](#nodeset) array_ | Each NodeSet is a functional grouping of Stroom nodes with a particular role, within the cluster.<br />It is recommended two NodeSets should be provided: one for storing and processing data and a separate one for<br />serving the Stroom front-end. |  | MinItems: 1 |
 | `extraJvmOpts` _string array_ | Additional Java Virtual Machine (JVM) options to use. Example of a valid entry: `-Xms1g` |  |  |
 | `extraEnv` _[EnvVar](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#envvar-v1-core) array_ | Additional environment variables provided to each NodeSet pod |  |  |
@@ -524,6 +541,10 @@ _Appears in:_ [StroomCluster](#stroomcluster)
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `nodes` _string array_ |  |  |  |
+| `migratedImage` _string_ | The image the database schema was last migrated with |  |  |
+| `migrationRetry` _string_ | The retry-migration annotation's value when the last migration failure was reported. Only a different value<br />retries the migration |  |  |
+| `observedGeneration` _integer_ | The spec generation this status was written for |  |  |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.36/#condition-v1-meta) array_ |  |  |  |
 
 
 ### StroomTaskAutoscalerSpec
@@ -568,6 +589,22 @@ _Appears in:_ [LogSenderSettings](#logsendersettings)
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `secretName` _string_ | Name of the TLS Secret containing a CA certificate (ca.crt) and client certificate/key pair (tls.crt and tls.key) |  |  |
+
+
+### UpgradeStrategy
+
+_Underlying type:_ string
+
+UpgradeStrategy determines whether nodes keep running while the database is migrated to a new Stroom version
+
+_Validation:_ Enum: [Online Offline]
+
+_Appears in:_ [StroomClusterSpec](#stroomclusterspec)
+
+| Value | Description |
+| --- | --- |
+| `Online` | OnlineUpgrade keeps the nodes on the old version serving while the migration runs<br /> |
+| `Offline` | OfflineUpgrade drains and stops every node before the migration runs<br /> |
 
 
 ### VolumeClaimDeletePolicy

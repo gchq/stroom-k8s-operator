@@ -1,5 +1,7 @@
 package v1
 
+import corev1 "k8s.io/api/core/v1"
+
 // VolumeClaimDeletePolicy determines when Stroom node PersistentVolumeClaims are deleted. If unset, they're never
 // deleted by the operator.
 // +kubebuilder:validation:Enum=DeleteOnScaledownAndClusterDeletion;DeleteOnScaledownOnly
@@ -12,6 +14,28 @@ const (
 	// DeleteOnScaledownOnlyPolicy deletes a node's PersistentVolumeClaim when its NodeSet is scaled down
 	DeleteOnScaledownOnlyPolicy VolumeClaimDeletePolicy = "DeleteOnScaledownOnly"
 )
+
+// UpgradeStrategy determines whether nodes keep running while the database is migrated to a new Stroom version
+// +kubebuilder:validation:Enum=Online;Offline
+type UpgradeStrategy string
+
+const (
+	// OnlineUpgrade keeps the nodes on the old version serving while the migration runs
+	OnlineUpgrade UpgradeStrategy = "Online"
+	// OfflineUpgrade drains and stops every node before the migration runs
+	OfflineUpgrade UpgradeStrategy = "Offline"
+)
+
+// MigrationSettings configures the Job that migrates the database to a new Stroom version
+type MigrationSettings struct {
+	// Seconds the migration may run before it's killed. Unset means no limit
+	// +kubebuilder:validation:Minimum=1
+	ActiveDeadlineSeconds *int64 `json:"activeDeadlineSeconds,omitempty"`
+	// Resources for the migration container
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+	// JAVA_OPTS for the migration process. Defaults to "-Xms128m -Xmx1g"
+	JavaOpts string `json:"javaOpts,omitempty"`
+}
 
 type IdentityProviderType string
 

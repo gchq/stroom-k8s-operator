@@ -24,6 +24,7 @@ spec:
     hostName: stroom.e2e.local
   podManagementPolicy: Parallel
   nodeTerminationPeriodSecs: 120
+  ${UPGRADE_STRATEGY}
   extraEnv:
     - name: STROOM_CLIENT_SECRET
       valueFrom:

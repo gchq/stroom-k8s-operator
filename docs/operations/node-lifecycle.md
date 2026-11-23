@@ -6,8 +6,9 @@ Stroom. Both authenticate to the Stroom API with a token obtained using `spec.op
 
 ## Starting
 
-When a node's container starts, Stroom boots. If the database schema needs creating or migrating, one node takes
-Stroom's bootstrap lock and does it while the others wait.
+When a node's container starts, Stroom boots. The database schema is already on the node's Stroom version: the
+operator creates or migrates it in a Job before any node starts on a new version (see
+[Upgrading Stroom](upgrading.md#upgrading-stroom)).
 
 Meanwhile, the startup probe runs `/stroom/scripts/node-start.sh` every `periodSeconds`. Once Stroom's API responds,
 the script:

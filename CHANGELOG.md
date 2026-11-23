@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased
+
+### Upgrade notes
+
+- **The operator migrates the database before the nodes run a new Stroom version.** When `spec.image` changes, it
+  holds the nodes on their current version and runs `./start.sh migrate` on the new image in a Job, then rolls the
+  nodes once the Job succeeds. A new cluster's schema is created the same way, before its first node starts.
+  Upgrading the operator doesn't migrate: an existing cluster records the image its nodes run in the new
+  `status.migratedImage`.
+- **You no longer need to raise the startup probe's `failureThreshold` for an upgrade**, as the nodes don't migrate
+  the database themselves.
+- **A failed migration is never retried automatically.** The nodes stay on their current version, and the new
+  `DatabaseMigrated` condition is `Failed`. Retry by setting the `stroom.gchq.github.io/retry-migration` annotation to
+  a new value.
+- **Moving `spec.image` to an older Stroom version is refused**, unless the `stroom.gchq.github.io/allow-downgrade`
+  annotation is `"true"`.
+- **The API key Job runs the version the database is on**, so it can no longer start a migration itself.
+
+See [Upgrading Stroom](https://gradata-systems.github.io/stroom-k8s-operator/operations/upgrading/#upgrading-stroom).
+
+### Added
+
+- `spec.upgradeStrategy`: `Online` (the default) keeps the nodes running during the migration; `Offline` drains and
+  stops them first, for upgrades that shouldn't run mixed versions.
+- `spec.migration`: a deadline, `JAVA_OPTS` and resources for the migration Job. By default it has no deadline.
+- `status.migratedImage`, `status.observedGeneration` and the `DatabaseMigrated` condition, with the reasons
+  `Pending`, `Running`, `Succeeded`, `Failed`, `DowngradeBlocked` and `Skipped`.
+- The `stroom.gchq.github.io/skip-migration` annotation, set to `"true"`, records `spec.image` as migrated without
+  running the migration Job: for a database migrated outside the operator, or fixed by hand after a failed migration.
+
+### Fixed
+
+- A database migration could be stopped partway through, leaving the schema partly changed: by the startup probe
+  of the node migrating it, or by the API key Job's 20-minute deadline and retries when it ran on a new version
+  first.
+- Nodes on a new Stroom version could start against a schema not yet migrated to it, and every node set rolled at
+  once, competing for Stroom's bootstrap lock.
+
 ## 2.0.0
 
 This is the `gchq/stroom-k8s-operator` fork. It merges upstream `gradata-systems/stroom-k8s-operator` 1.2.0-beta.1
